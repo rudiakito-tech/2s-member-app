@@ -15,7 +15,7 @@ class AppConfig {
   static const FirebaseOptions firebaseAndroidOptions = FirebaseOptions(
     apiKey: 'AIzaSyAjl__6_vVoRlD1tqXVQBCmSPume2yjfzk',
     appId: '1:514037486909:android:393b7c1f0f0c123580e154',
-    messagingSenderId: '',
+    messagingSenderId: '514037486909',
     projectId: 'fir-member-78791',
   );
 }
