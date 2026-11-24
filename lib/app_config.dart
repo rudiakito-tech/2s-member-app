@@ -13,9 +13,9 @@ class AppConfig {
 
   // Konfigurasi Firebase Android (diambil dari Firebase Console -> Project Settings)
   static const FirebaseOptions firebaseAndroidOptions = FirebaseOptions(
-    apiKey: 'ISI_API_KEY',
+    apiKey: 'AIzaSyAjl__6_vVoRlD1tqXVQBCmSPume2yjfzk',
     appId: 'ISI_APP_ID',
     messagingSenderId: 'ISI_SENDER_ID',
-    projectId: 'ISI_PROJECT_ID',
+    projectId: 'fir-member-78791',
   );
 }
