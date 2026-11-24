@@ -1,9 +1,8 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'app_config.dart';
 import 'data_store.dart';
+import 'tabs_extra.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -72,66 +71,36 @@ class _LoginOtpPageState extends State<LoginOtpPage> {
                 child: Icon(Icons.build_circle, size: 46, color: Colors.white),
               ),
               const SizedBox(height: 16),
-              const Text(
-                '2S Member',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
-              ),
-              const Text(
-                '2S Service Handphone • Nota • Garansi • Store',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey),
-              ),
+              const Text('2S Member', textAlign: TextAlign.center, style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+              const Text('2S Service Handphone • Nota • Garansi • Store', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
               const SizedBox(height: 32),
               TextField(
                 controller: _nameC,
-                decoration: const InputDecoration(
-                  labelText: 'Nama Lengkap',
-                  prefixIcon: Icon(Icons.person),
-                  border: OutlineInputBorder(),
-                ),
+                decoration: const InputDecoration(labelText: 'Nama Lengkap', prefixIcon: Icon(Icons.person), border: OutlineInputBorder()),
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: _phoneC,
                 keyboardType: TextInputType.phone,
-                decoration: const InputDecoration(
-                  labelText: 'Nomor WhatsApp (OTP)',
-                  prefixIcon: Icon(Icons.chat),
-                  border: OutlineInputBorder(),
-                ),
+                decoration: const InputDecoration(labelText: 'Nomor WhatsApp (OTP)', prefixIcon: Icon(Icons.chat), border: OutlineInputBorder()),
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: _refC,
-                decoration: const InputDecoration(
-                  labelText: 'Kode Referral / Affiliate (Opsional)',
-                  prefixIcon: Icon(Icons.card_giftcard),
-                  border: OutlineInputBorder(),
-                ),
+                decoration: const InputDecoration(labelText: 'Kode Referral / Affiliate (Opsional)', prefixIcon: Icon(Icons.card_giftcard), border: OutlineInputBorder()),
               ),
               if (_otpSent) ...[
                 const SizedBox(height: 12),
                 Container(
                   padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.green.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    'Simulasi WA OTP terkirim: $_demoOtp (masukkan kode ini)',
-                    style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold),
-                  ),
+                  decoration: BoxDecoration(color: Colors.green.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8)),
+                  child: Text('Simulasi WA OTP terkirim: $_demoOtp (masukkan kode ini)', style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: _otpC,
                   keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Masukkan 6 Digit OTP WhatsApp',
-                    prefixIcon: Icon(Icons.lock),
-                    border: OutlineInputBorder(),
-                  ),
+                  decoration: const InputDecoration(labelText: 'Masukkan 6 Digit OTP WhatsApp', prefixIcon: Icon(Icons.lock), border: OutlineInputBorder()),
                 ),
               ],
               const SizedBox(height: 20),
@@ -143,16 +112,9 @@ class _LoginOtpPageState extends State<LoginOtpPage> {
                       _otpSent = true;
                     });
                   } else {
-                    final ok = await widget.ctrl.verifyWhatsappOtp(
-                      _phoneC.text,
-                      _nameC.text,
-                      _otpC.text,
-                      _refC.text,
-                    );
+                    final ok = await widget.ctrl.verifyWhatsappOtp(_phoneC.text, _nameC.text, _otpC.text, _refC.text);
                     if (!ok && context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Kode OTP salah!')),
-                      );
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Kode OTP salah!')));
                     }
                   }
                 },
@@ -239,11 +201,7 @@ class _MainShellState extends State<MainShell> {
               TextField(controller: devC, decoration: const InputDecoration(labelText: 'Tipe HP')),
               TextField(controller: compC, decoration: const InputDecoration(labelText: 'Keluhan')),
               TextField(controller: partC, decoration: const InputDecoration(labelText: 'Sparepart')),
-              TextField(
-                controller: costC,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Biaya (Rp)'),
-              ),
+              TextField(controller: costC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Biaya (Rp)')),
             ],
           ),
         ),
@@ -295,23 +253,18 @@ class HomeServiceTab extends StatelessWidget {
                 const SizedBox(height: 8),
                 Text('${u.points} Poin', style: const TextStyle(color: Colors.amber, fontSize: 26, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: FilledButton.tonalIcon(
-                        onPressed: ctrl.canCheckInToday()
-                            ? () {
-                                final pts = ctrl.performDailyCheckIn();
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text('Check-in sukses! +$pts Poin')),
-                                );
-                              }
-                            : null,
-                        icon: const Icon(Icons.calendar_today),
-                        label: Text(ctrl.canCheckInToday() ? 'Check-in Harian (Streak ${u.checkInStreak}/7)' : 'Sudah Check-in Hari Ini'),
-                      ),
-                    ),
-                  ],
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.tonalIcon(
+                    onPressed: ctrl.canCheckInToday()
+                        ? () {
+                            final pts = ctrl.performDailyCheckIn();
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Check-in sukses! +$pts Poin')));
+                          }
+                        : null,
+                    icon: const Icon(Icons.calendar_today),
+                    label: Text(ctrl.canCheckInToday() ? 'Check-in Harian (Streak ${u.checkInStreak}/7)' : 'Sudah Check-in Hari Ini'),
+                  ),
                 ),
               ],
             ),
@@ -357,9 +310,7 @@ class HomeServiceTab extends StatelessWidget {
                           OutlinedButton.icon(
                             onPressed: () {
                               ctrl.claimWarranty(s);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Klaim garansi diajukan! Bawa HP ke 2S Service.')),
-                              );
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Klaim garansi diajukan! Bawa HP ke 2S Service.')));
                             },
                             icon: const Icon(Icons.verified_user, size: 18),
                             label: const Text('Klaim Garansi'),
@@ -409,110 +360,3 @@ class HomeServiceTab extends StatelessWidget {
     );
   }
 }
-
-class StoreTab extends StatefulWidget {
-  final AppDataController ctrl;
-  const StoreTab({super.key, required this.ctrl});
-  @override
-  State<StoreTab> createState() => _StoreTabState();
-}
-
-class _StoreTabState extends State<StoreTab> {
-  bool _usePoints = true;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        if (widget.ctrl.extraStoreDiscount > 0)
-          Card(
-            color: Colors.amber.withValues(alpha: 0.2),
-            child: ListTile(
-              leading: const Icon(Icons.local_offer, color: Colors.orange),
-              title: Text('Voucher Aktif: Potongan ${widget.ctrl.formatRupiah(widget.ctrl.extraStoreDiscount)}'),
-            ),
-          ),
-        SwitchListTile(
-          title: Text('Tukar Poin saat Beli (Saldo: ${widget.ctrl.currentUser!.points} pts)'),
-          subtitle: const Text('1 Poin = Rp 100 potongan harga'),
-          value: _usePoints,
-          onChanged: (v) => setState(() => _usePoints = v),
-        ),
-        ...widget.ctrl.products.map((p) => Card(
-              margin: const EdgeInsets.only(bottom: 10),
-              child: ListTile(
-                leading: CircleAvatar(child: Icon(p.icon)),
-                title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text('${p.category} • Diskon ${p.discountPercent}%\n${widget.ctrl.formatRupiah(p.finalPrice)}'),
-                isThreeLine: true,
-                trailing: FilledButton(
-                  onPressed: () {
-                    final msg = widget.ctrl.checkoutProduct(p, _usePoints);
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-                  },
-                  child: const Text('Beli'),
-                ),
-              ),
-            )),
-      ],
-    );
-  }
-}
-
-class GamesMissionTab extends StatefulWidget {
-  final AppDataController ctrl;
-  const GamesMissionTab({super.key, required this.ctrl});
-  @override
-  State<GamesMissionTab> createState() => _GamesMissionTabState();
-}
-
-class _GamesMissionTabState extends State<GamesMissionTab> {
-  double _turns = 0;
-
-  @override
-  Widget build(BuildContext context) {
-    final u = widget.ctrl.currentUser!;
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                const Text('Mini Game: Spin & Win 2S', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
-                AnimatedRotation(
-                  turns: _turns,
-                  duration: const Duration(seconds: 2),
-                  curve: Curves.easeOutCubic,
-                  child: const CircleAvatar(
-                    radius: 52,
-                    backgroundColor: Colors.amber,
-                    child: Icon(Icons.casino, size: 54, color: Colors.deepOrange),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                FilledButton(
-                  onPressed: () async {
-                    setState(() => _turns += 3 + Random().nextDouble());
-                    await Future.delayed(const Duration(seconds: 2));
-                    final result = widget.ctrl.spinWheelReward();
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result)));
-                    }
-                  },
-                  child: Text(u.freeSpinUsedToday ? 'Putar Lagi (20 Poin)' : 'Putar GRATIS Hari Ini!'),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 16),
-        const Text('Misi Harian Berhadiah Poin', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 8),
-        ...widget.ctrl.missions.map((m) => Card(
-              child: ListTile(
-                title: Text(m.title, style: const TextStyle(fontWeight: FontWeight.bold)),
-  
