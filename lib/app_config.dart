@@ -5,7 +5,7 @@ class AppConfig {
   static const String shopName = '2S Service Handphone';
 
   // Ubah ke true jika sudah mengisi konfigurasi Firebase di bawah
-  static const bool useFirebase = false;
+  static const bool useFirebase = true;
 
   // Konfigurasi Cloudinary (Gratis tanpa kartu kredit) untuk upload foto nanti
   static const String cloudinaryCloudName = 'ISI_CLOUD_NAME_ANDA';
