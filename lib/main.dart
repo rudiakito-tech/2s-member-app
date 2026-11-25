@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'app_config.dart';
 import 'data_store.dart';
-import 'tabs_extras.dart';
+import 'tabs_extra.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
