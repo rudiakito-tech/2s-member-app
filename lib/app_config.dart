@@ -8,7 +8,7 @@ class AppConfig {
   static const bool useFirebase = true;
 
   // WAJIB GANTI dengan nomor WA yang terhubung ke Fonnte (format 628..., tanpa + atau spasi)
-  static const String businessWaNumber = '6281234567890';
+  static const String businessWaNumber = '62895414593299';
 
   // Konfigurasi Cloudinary (untuk upload foto di tahap berikutnya)
   static const String cloudinaryCloudName = 'ISI_CLOUD_NAME_ANDA';
