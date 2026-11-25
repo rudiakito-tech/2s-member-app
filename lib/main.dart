@@ -2,8 +2,8 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'app_config.dart';
+import 'auth_page.dart';
 import 'data_store.dart';
 
 Future<void> main() async {
@@ -24,6 +24,12 @@ class _TwoSMemberAppState extends State<TwoSMemberApp> {
   final AppDataController ctrl = AppDataController();
 
   @override
+  void initState() {
+    super.initState();
+    ctrl.initSession();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: ctrl,
@@ -35,107 +41,55 @@ class _TwoSMemberAppState extends State<TwoSMemberApp> {
             useMaterial3: true,
             colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0D47A1)),
           ),
-          home: ctrl.currentUser == null ? LoginOtpPage(ctrl: ctrl) : MainShell(ctrl: ctrl),
+          home: !ctrl.isInitialized
+              ? const Scaffold(
+                  body: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.build_circle, size: 64, color: Color(0xFF0D47A1)),
+                        SizedBox(height: 16),
+                        CircularProgressIndicator(),
+                      ],
+                    ),
+                  ),
+                )
+              : MainShell(ctrl: ctrl),
         );
       },
     );
   }
 }
 
-class LoginOtpPage extends StatefulWidget {
-  final AppDataController ctrl;
-  const LoginOtpPage({super.key, required this.ctrl});
-  @override
-  State<LoginOtpPage> createState() => _LoginOtpPageState();
+void openAuthPage(BuildContext context, AppDataController ctrl, {int tab = 0}) {
+  Navigator.push(context, MaterialPageRoute(builder: (_) => AuthPage(ctrl: ctrl, initialTab: tab)));
 }
 
-class _LoginOtpPageState extends State<LoginOtpPage> {
-  final _nameC = TextEditingController();
-  final _refC = TextEditingController();
-  bool _loading = false;
-  String? _otpCode;
-
-  Future<void> _startReverseOtp() async {
-    setState(() => _loading = true);
-    final code = await widget.ctrl.createReverseOtpSession(_nameC.text, _refC.text);
-    setState(() {
-      _otpCode = code;
-      _loading = false;
-    });
-
-    final msg = Uri.encodeComponent('LOGIN $code');
-    final url = Uri.parse('https://wa.me/${AppConfig.businessWaNumber}?text=$msg');
-    await launchUrl(url, mode: LaunchMode.externalApplication);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const SizedBox(height: 28),
-              const CircleAvatar(
-                radius: 40,
-                backgroundColor: Color(0xFF0D47A1),
-                child: Icon(Icons.build_circle, size: 46, color: Colors.white),
-              ),
-              const SizedBox(height: 16),
-              const Text('2S Member', textAlign: TextAlign.center, style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
-              const Text('Reverse OTP WhatsApp • Tanpa Biaya SMS', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
-              const SizedBox(height: 28),
-              TextField(
-                controller: _nameC,
-                decoration: const InputDecoration(labelText: 'Nama Lengkap', prefixIcon: Icon(Icons.person), border: OutlineInputBorder()),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _refC,
-                decoration: const InputDecoration(labelText: 'Kode Referral (Opsional)', prefixIcon: Icon(Icons.card_giftcard), border: OutlineInputBorder()),
-              ),
-              const SizedBox(height: 20),
-              FilledButton.icon(
-                onPressed: _loading ? null : _startReverseOtp,
-                icon: const Icon(Icons.chat),
-                label: Text(_loading ? 'Menyiapkan...' : 'Login via WhatsApp'),
-              ),
-              if (_otpCode != null) ...[
-                const SizedBox(height: 20),
-                Card(
-                  color: Colors.green.withValues(alpha: 0.1),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      children: [
-                        const CircularProgressIndicator(),
-                        const SizedBox(height: 12),
-                        Text('Kode Anda: $_otpCode', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 6),
-                        const Text(
-                          'Kirim pesan yang muncul di WhatsApp, lalu kembali ke aplikasi ini. Halaman akan masuk otomatis!',
-                          textAlign: TextAlign.center,
-                        ),
-                        TextButton(
-                          onPressed: () {
-                            Clipboard.setData(ClipboardData(text: 'LOGIN $_otpCode'));
-                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Teks LOGIN disalin!')));
-                          },
-                          child: const Text('Salin Teks LOGIN (jika WA tidak terbuka otomatis)'),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ],
-          ),
+void promptLoginDialog(BuildContext context, AppDataController ctrl, String actionName) {
+  showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Masuk atau Daftar Dulu'),
+      content: Text('Untuk $actionName, Anda harus Masuk atau Daftar akun 2S Member terlebih dahulu.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Nanti')),
+        OutlinedButton(
+          onPressed: () {
+            Navigator.pop(ctx);
+            openAuthPage(context, ctrl, tab: 1);
+          },
+          child: const Text('Daftar'),
         ),
-      ),
-    );
-  }
+        FilledButton(
+          onPressed: () {
+            Navigator.pop(ctx);
+            openAuthPage(context, ctrl, tab: 0);
+          },
+          child: const Text('Masuk'),
+        ),
+      ],
+    ),
+  );
 }
 
 class MainShell extends StatefulWidget {
@@ -161,16 +115,25 @@ class _MainShellState extends State<MainShell> {
       appBar: AppBar(
         title: const Text('2S Member'),
         actions: [
-          Row(
-            children: [
-              const Text('Kasir', style: TextStyle(fontSize: 12)),
-              Switch(value: widget.ctrl.isAdminMode, onChanged: (v) => setState(() => widget.ctrl.isAdminMode = v)),
-            ],
-          ),
+          if (widget.ctrl.isGuest)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: FilledButton.tonal(
+                onPressed: () => openAuthPage(context, widget.ctrl, tab: 0),
+                child: const Text('Masuk / Daftar'),
+              ),
+            )
+          else if (widget.ctrl.canUseAdmin)
+            Row(
+              children: [
+                const Text('Kasir', style: TextStyle(fontSize: 12)),
+                Switch(value: widget.ctrl.isAdminMode, onChanged: (v) => setState(() => widget.ctrl.isAdminMode = v)),
+              ],
+            ),
         ],
       ),
       body: pages[_tab],
-      floatingActionButton: widget.ctrl.isAdminMode && _tab == 0
+      floatingActionButton: widget.ctrl.isAdminMode && widget.ctrl.canUseAdmin && _tab == 0
           ? FloatingActionButton.extended(
               onPressed: () => _showAddServiceDialog(context),
               icon: const Icon(Icons.add),
@@ -227,7 +190,7 @@ class _MainShellState extends State<MainShell> {
               );
               if (ctx.mounted) Navigator.pop(ctx);
             },
-            child: const Text('Simpan ke Firestore'),
+            child: const Text('Simpan'),
           ),
         ],
       ),
@@ -241,6 +204,65 @@ class HomeServiceTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (ctrl.isGuest) {
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            color: const Color(0xFF0D47A1),
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.card_giftcard, color: Colors.amber),
+                      SizedBox(width: 8),
+                      Text('Mode Tamu • Promo Member Baru', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  const Text('Selamat Datang di 2S Service HP!', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Anda wajib Masuk atau Daftar terlebih dahulu untuk melihat status servis HP, e-Nota, klaim garansi, Check-in poin & belanja Store.',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton(
+                          style: FilledButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
+                          onPressed: () => openAuthPage(context, ctrl, tab: 0),
+                          child: const Text('Masuk', style: TextStyle(fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(foregroundColor: Colors.white, side: const BorderSide(color: Colors.white)),
+                          onPressed: () => openAuthPage(context, ctrl, tab: 1),
+                          child: const Text('Daftar (+150 Poin)'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text('Promo & Keunggulan 2S Member', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          const Card(child: ListTile(leading: Icon(Icons.local_offer, color: Colors.orange), title: Text('Diskon Aksesoris Store s/d 25%'), subtitle: Text('Khusus member aktif + potongan tukar poin!'))),
+          const Card(child: ListTile(leading: Icon(Icons.verified_user, color: Colors.green), title: Text('e-Nota & Pantau Garansi Otomatis'), subtitle: Text('Tidak takut nota hilang saat klaim garansi servis.'))),
+          const Card(child: ListTile(leading: Icon(Icons.casino, color: Colors.purple), title: Text('Check-in Harian & Mini Game Berhadiah'), subtitle: Text('Kumpulkan poin gratis setiap hari & raih tier Platinum!'))),
+        ],
+      );
+    }
+
     final u = ctrl.currentUser!;
     final visibleServices = ctrl.isAdminMode
         ? ctrl.services
@@ -292,7 +314,7 @@ class HomeServiceTab extends StatelessWidget {
           const Card(
             child: Padding(
               padding: EdgeInsets.all(16),
-              child: Text('Belum ada transaksi servis. Aktifkan sakelar Kasir di kanan atas untuk input servis tes!'),
+              child: Text('Belum ada transaksi servis atas nomor WA Anda.'),
             ),
           ),
         ...visibleServices.map((s) => Card(
@@ -391,9 +413,19 @@ class _StoreTabState extends State<StoreTab> {
 
   @override
   Widget build(BuildContext context) {
+    final pts = widget.ctrl.currentUser?.points ?? 0;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        if (widget.ctrl.isGuest)
+          Card(
+            color: Colors.amber.withValues(alpha: 0.15),
+            child: ListTile(
+              leading: const Icon(Icons.info, color: Colors.orange),
+              title: const Text('Mode Tamu: Anda bisa lihat katalog promo. Masuk/Daftar untuk membeli!'),
+              trailing: TextButton(onPressed: () => openAuthPage(context, widget.ctrl), child: const Text('Masuk')),
+            ),
+          ),
         if (widget.ctrl.extraStoreDiscount > 0)
           Card(
             color: Colors.amber.withValues(alpha: 0.2),
@@ -402,12 +434,13 @@ class _StoreTabState extends State<StoreTab> {
               title: Text('Voucher Aktif: Potongan ${widget.ctrl.formatRupiah(widget.ctrl.extraStoreDiscount)}'),
             ),
           ),
-        SwitchListTile(
-          title: Text('Tukar Poin (Saldo: ${widget.ctrl.currentUser!.points} pts)'),
-          subtitle: const Text('1 Poin = Rp 100 potongan'),
-          value: _usePoints,
-          onChanged: (v) => setState(() => _usePoints = v),
-        ),
+        if (!widget.ctrl.isGuest)
+          SwitchListTile(
+            title: Text('Tukar Poin (Saldo: $pts pts)'),
+            subtitle: const Text('1 Poin = Rp 100 potongan'),
+            value: _usePoints,
+            onChanged: (v) => setState(() => _usePoints = v),
+          ),
         ...widget.ctrl.products.map((p) => Card(
               margin: const EdgeInsets.only(bottom: 10),
               child: ListTile(
@@ -417,6 +450,10 @@ class _StoreTabState extends State<StoreTab> {
                 isThreeLine: true,
                 trailing: FilledButton(
                   onPressed: () async {
+                    if (widget.ctrl.isGuest) {
+                      promptLoginDialog(context, widget.ctrl, 'membeli produk Store');
+                      return;
+                    }
                     final msg = await widget.ctrl.checkoutProduct(p, _usePoints);
                     if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
                   },
@@ -441,7 +478,7 @@ class _GamesMissionTabState extends State<GamesMissionTab> {
 
   @override
   Widget build(BuildContext context) {
-    final u = widget.ctrl.currentUser!;
+    final u = widget.ctrl.currentUser;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -461,12 +498,16 @@ class _GamesMissionTabState extends State<GamesMissionTab> {
                 const SizedBox(height: 12),
                 FilledButton(
                   onPressed: () async {
+                    if (widget.ctrl.isGuest) {
+                      promptLoginDialog(context, widget.ctrl, 'memutar Mini Game');
+                      return;
+                    }
                     setState(() => _turns += 3 + Random().nextDouble());
                     await Future.delayed(const Duration(seconds: 2));
                     final result = await widget.ctrl.spinWheelReward();
                     if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result)));
                   },
-                  child: Text(u.freeSpinUsedToday ? 'Putar Lagi (20 Poin)' : 'Putar GRATIS Hari Ini!'),
+                  child: Text(u?.freeSpinUsedToday == true ? 'Putar Lagi (20 Poin)' : 'Putar GRATIS Hari Ini!'),
                 ),
               ],
             ),
@@ -481,7 +522,12 @@ class _GamesMissionTabState extends State<GamesMissionTab> {
                 subtitle: Text('${m.description} (+${m.rewardPoints} Poin)'),
                 trailing: m.isClaimed
                     ? const Chip(label: Text('Selesai'))
-                    : FilledButton(onPressed: m.isCompleted ? () => widget.ctrl.claimMission(m) : null, child: Text(m.isCompleted ? 'Klaim' : 'Belum')),
+                    : FilledButton(
+                        onPressed: widget.ctrl.isGuest
+                            ? () => promptLoginDialog(context, widget.ctrl, 'klaim Misi')
+                            : (m.isCompleted ? () => widget.ctrl.claimMission(m) : null),
+                        child: Text(m.isCompleted ? 'Klaim' : 'Belum'),
+                      ),
               ),
             )),
       ],
@@ -495,7 +541,7 @@ class LeaderboardAffiliateTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final u = ctrl.currentUser!;
+    final u = ctrl.currentUser;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -508,17 +554,23 @@ class LeaderboardAffiliateTab extends StatelessWidget {
               children: [
                 const Text('Program Affiliate 2S Member', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),
-                Text('Kode Referral Anda: ${u.referralCode}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.indigo)),
-                const Text('Ajak teman login pakai kode ini untuk dapat +100 Poin otomatis!'),
-                const SizedBox(height: 10),
-                OutlinedButton.icon(
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: u.referralCode));
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Kode referral disalin!')));
-                  },
-                  icon: const Icon(Icons.copy),
-                  label: const Text('Salin Kode Referral'),
-                ),
+                if (u == null) ...[
+                  const Text('Masuk atau daftar untuk mendapatkan kode referral unik dan komisi +100 Poin tiap teman mendaftar!'),
+                  const SizedBox(height: 8),
+                  FilledButton(onPressed: () => openAuthPage(context, ctrl, tab: 1), child: const Text('Daftar Sekarang')),
+                ] else ...[
+                  Text('Kode Referral Anda: ${u.referralCode}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.indigo)),
+                  const Text('Ajak teman daftar pakai kode ini untuk dapat +100 Poin otomatis!'),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: u.referralCode));
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Kode referral disalin!')));
+                    },
+                    icon: const Icon(Icons.copy),
+                    label: const Text('Salin Kode Referral'),
+                  ),
+                ],
               ],
             ),
           ),
@@ -556,7 +608,37 @@ class _ProfileTabState extends State<ProfileTab> {
 
   @override
   Widget build(BuildContext context) {
-    final u = widget.ctrl.currentUser!;
+    final u = widget.ctrl.currentUser;
+    if (u == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.account_circle, size: 80, color: Colors.grey),
+              const SizedBox(height: 12),
+              const Text('Anda belum login', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              const Text('Masuk atau daftar untuk melihat profil, poin, dan verifikasi email.', textAlign: TextAlign.center),
+              const SizedBox(height: 18),
+              FilledButton.icon(
+                onPressed: () => openAuthPage(context, widget.ctrl, tab: 0),
+                icon: const Icon(Icons.login),
+                label: const Text('Masuk Akun'),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () => openAuthPage(context, widget.ctrl, tab: 1),
+                icon: const Icon(Icons.person_add),
+                label: const Text('Daftar Akun Baru'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -565,6 +647,7 @@ class _ProfileTabState extends State<ProfileTab> {
             leading: const CircleAvatar(child: Icon(Icons.person)),
             title: Text(u.name, style: const TextStyle(fontWeight: FontWeight.bold)),
             subtitle: Text('WA: ${u.phone} • Tier: ${u.tier}'),
+            trailing: const Chip(avatar: Icon(Icons.verified, color: Colors.green, size: 18), label: Text('WA OK')),
           ),
         ),
         const SizedBox(height: 12),
@@ -587,7 +670,7 @@ class _ProfileTabState extends State<ProfileTab> {
                 else ...[
                   TextField(controller: _emailC, decoration: const InputDecoration(labelText: 'Email Anda', border: OutlineInputBorder())),
                   const SizedBox(height: 8),
-                  TextField(controller: _passC, obscureText: true, decoration: const InputDecoration(labelText: 'Buat Password (min. 6 huruf)', border: OutlineInputBorder())),
+                  TextField(controller: _passC, obscureText: true, decoration: const InputDecoration(labelText: 'Password Email (min. 6 huruf)', border: OutlineInputBorder())),
                   const SizedBox(height: 10),
                   Wrap(
                     spacing: 8,
@@ -618,6 +701,13 @@ class _ProfileTabState extends State<ProfileTab> {
               ],
             ),
           ),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+          onPressed: () => widget.ctrl.logout(),
+          icon: const Icon(Icons.logout),
+          label: const Text('Keluar dari Akun'),
         ),
         const SizedBox(height: 16),
         const Text('Riwayat Reward Poin', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
