@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'app_config.dart';
 import 'data_store.dart';
-import 'tabs_extra.dart';
+import 'tabs_extras.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -49,10 +50,11 @@ class LoginOtpPage extends StatefulWidget {
 
 class _LoginOtpPageState extends State<LoginOtpPage> {
   final _nameC = TextEditingController();
-  final _phoneC = TextEditingController(text: '081234567890');
+  final _phoneC = TextEditingController();
   final _otpC = TextEditingController();
   final _refC = TextEditingController();
   bool _otpSent = false;
+  bool _loading = false;
   String? _demoOtp;
 
   @override
@@ -82,7 +84,7 @@ class _LoginOtpPageState extends State<LoginOtpPage> {
               TextField(
                 controller: _phoneC,
                 keyboardType: TextInputType.phone,
-                decoration: const InputDecoration(labelText: 'Nomor WhatsApp (OTP)', prefixIcon: Icon(Icons.chat), border: OutlineInputBorder()),
+                decoration: const InputDecoration(labelText: 'Nomor WhatsApp (cth: 081234567890)', prefixIcon: Icon(Icons.chat), border: OutlineInputBorder()),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -94,7 +96,7 @@ class _LoginOtpPageState extends State<LoginOtpPage> {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(color: Colors.green.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8)),
-                  child: Text('Simulasi WA OTP terkirim: $_demoOtp (masukkan kode ini)', style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
+                  child: Text('Simulasi OTP WA: $_demoOtp (masukkan kode ini)', style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -105,21 +107,31 @@ class _LoginOtpPageState extends State<LoginOtpPage> {
               ],
               const SizedBox(height: 20),
               FilledButton.icon(
-                onPressed: () async {
-                  if (!_otpSent) {
-                    setState(() {
-                      _demoOtp = widget.ctrl.requestWhatsappOtp(_phoneC.text);
-                      _otpSent = true;
-                    });
-                  } else {
-                    final ok = await widget.ctrl.verifyWhatsappOtp(_phoneC.text, _nameC.text, _otpC.text, _refC.text);
-                    if (!ok && context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Kode OTP salah!')));
-                    }
-                  }
-                },
+                onPressed: _loading
+                    ? null
+                    : () async {
+                        if (!_otpSent) {
+                          if (_phoneC.text.trim().length < 9) {
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Masukkan nomor WA yang valid')));
+                            return;
+                          }
+                          setState(() {
+                            _demoOtp = widget.ctrl.requestWhatsappOtp(_phoneC.text);
+                            _otpSent = true;
+                          });
+                        } else {
+                          setState(() => _loading = true);
+                          final err = await widget.ctrl.verifyWhatsappOtp(_phoneC.text, _nameC.text, _otpC.text, _refC.text);
+                          if (mounted) {
+                            setState(() => _loading = false);
+                            if (err != null) {
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+                            }
+                          }
+                        }
+                      },
                 icon: Icon(_otpSent ? Icons.login : Icons.send),
-                label: Text(_otpSent ? 'Verifikasi & Masuk' : 'Kirim OTP WhatsApp'),
+                label: Text(_loading ? 'Menghubungkan...' : (_otpSent ? 'Verifikasi & Masuk' : 'Kirim OTP WhatsApp')),
               ),
             ],
           ),
@@ -149,28 +161,8 @@ class _MainShellState extends State<MainShell> {
       ProfileTab(ctrl: widget.ctrl),
     ];
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('2S Member'),
-        actions: [
-          Row(
-            children: [
-              const Text('Kasir', style: TextStyle(fontSize: 12)),
-              Switch(
-                value: widget.ctrl.isAdminMode,
-                onChanged: (v) => setState(() => widget.ctrl.isAdminMode = v),
-              ),
-            ],
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('2S Member')),
       body: pages[_tab],
-      floatingActionButton: widget.ctrl.isAdminMode && _tab == 0
-          ? FloatingActionButton.extended(
-              onPressed: () => _showAddServiceDialog(context),
-              icon: const Icon(Icons.add),
-              label: const Text('Input Servis'),
-            )
-          : null,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
         onDestinationSelected: (i) => setState(() => _tab = i),
@@ -184,51 +176,13 @@ class _MainShellState extends State<MainShell> {
       ),
     );
   }
-
-  void _showAddServiceDialog(BuildContext context) {
-    final devC = TextEditingController();
-    final compC = TextEditingController();
-    final partC = TextEditingController();
-    final costC = TextEditingController(text: '250000');
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Tambah Transaksi Servis'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(controller: devC, decoration: const InputDecoration(labelText: 'Tipe HP')),
-              TextField(controller: compC, decoration: const InputDecoration(labelText: 'Keluhan')),
-              TextField(controller: partC, decoration: const InputDecoration(labelText: 'Sparepart')),
-              TextField(controller: costC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Biaya (Rp)')),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
-          FilledButton(
-            onPressed: () {
-              widget.ctrl.addNewService(
-                devC.text.isEmpty ? 'HP Pelanggan' : devC.text,
-                compC.text.isEmpty ? 'Pengecekan' : compC.text,
-                partC.text.isEmpty ? 'Jasa Servis' : partC.text,
-                int.tryParse(costC.text) ?? 150000,
-                30,
-              );
-              Navigator.pop(ctx);
-            },
-            child: const Text('Simpan'),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 class HomeServiceTab extends StatelessWidget {
   final AppDataController ctrl;
   const HomeServiceTab({super.key, required this.ctrl});
+
+  String _fmtDate(DateTime d) => '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
 
   @override
   Widget build(BuildContext context) {
@@ -246,7 +200,7 @@ class HomeServiceTab extends StatelessWidget {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text('Halo, ${u.name}', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                    Expanded(child: Text('Halo, ${u.name}', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold))),
                     Chip(label: Text('${u.tier} Member')),
                   ],
                 ),
@@ -257,9 +211,11 @@ class HomeServiceTab extends StatelessWidget {
                   width: double.infinity,
                   child: FilledButton.tonalIcon(
                     onPressed: ctrl.canCheckInToday()
-                        ? () {
-                            final pts = ctrl.performDailyCheckIn();
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Check-in sukses! +$pts Poin')));
+                        ? () async {
+                            final pts = await ctrl.performDailyCheckIn();
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Check-in sukses! +$pts Poin')));
+                            }
                           }
                         : null,
                     icon: const Icon(Icons.calendar_today),
@@ -273,6 +229,13 @@ class HomeServiceTab extends StatelessWidget {
         const SizedBox(height: 16),
         const Text('Transaksi Servis, Nota & Garansi', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
+        if (ctrl.services.isEmpty)
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text('Belum ada data servis untuk nomor ${u.phone}.\n(Tambahkan dokumen di koleksi "services" Firebase Console dengan userPhone: "${u.phone}")'),
+            ),
+          ),
         ...ctrl.services.map((s) => Card(
               margin: const EdgeInsets.only(bottom: 12),
               child: Padding(
@@ -293,8 +256,8 @@ class HomeServiceTab extends StatelessWidget {
                     const SizedBox(height: 6),
                     Text(
                       s.status == 'Selesai' || s.status == 'Diambil'
-                          ? 'Garansi: Sisa ${s.remainingWarrantyDays} hari dari ${s.warrantyDays} hari'
-                          : 'Garansi aktif setelah servis selesai',
+                          ? 'Garansi: Sisa ${s.remainingWarrantyDays} hari (s/d ${_fmtDate(s.warrantyExpiredAt)})'
+                          : 'Garansi aktif setelah servis selesai (${s.warrantyDays} hari)',
                       style: TextStyle(color: s.remainingWarrantyDays > 0 ? Colors.green : Colors.red),
                     ),
                     const SizedBox(height: 8),
@@ -308,24 +271,18 @@ class HomeServiceTab extends StatelessWidget {
                         ),
                         if ((s.status == 'Selesai' || s.status == 'Diambil') && s.remainingWarrantyDays > 0 && !s.warrantyClaimed)
                           OutlinedButton.icon(
-                            onPressed: () {
-                              ctrl.claimWarranty(s);
-                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Klaim garansi diajukan! Bawa HP ke 2S Service.')));
+                            onPressed: () async {
+                              await ctrl.claimWarranty(s);
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Klaim garansi diajukan! Bawa HP ke 2S Service.')),
+                                );
+                              }
                             },
                             icon: const Icon(Icons.verified_user, size: 18),
                             label: const Text('Klaim Garansi'),
                           ),
                         if (s.warrantyClaimed) const Chip(label: Text('Garansi Diajukan')),
-                        if (ctrl.isAdminMode)
-                          DropdownButton<String>(
-                            value: s.status,
-                            items: ['Menunggu Cek', 'Dikerjakan', 'Selesai', 'Diambil']
-                                .map((st) => DropdownMenuItem(value: st, child: Text(st)))
-                                .toList(),
-                            onChanged: (v) {
-                              if (v != null) ctrl.updateServiceStatus(s, v);
-                            },
-                          ),
                       ],
                     ),
                   ],
@@ -337,26 +294,91 @@ class HomeServiceTab extends StatelessWidget {
   }
 
   void _showNotaDialog(BuildContext context, ServiceOrder s) {
+    final textNota = '=== e-Nota 2S Service Handphone ===\n'
+        'No. Nota : ${s.invoiceNo}\n'
+        'Tanggal  : ${_fmtDate(s.createdAt)}\n'
+        'Perangkat: ${s.deviceName}\n'
+        'Keluhan  : ${s.complaint}\n'
+        'Sparepart: ${s.replacedPart}\n'
+        'Status   : ${s.status}\n'
+        'Garansi  : ${s.warrantyDays} Hari\n'
+        'Total    : ${ctrl.formatRupiah(s.totalCost)}';
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('e-Nota 2S Service HP'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('No. Nota : ${s.invoiceNo}'),
-            Text('Perangkat: ${s.deviceName}'),
-            Text('Keluhan  : ${s.complaint}'),
-            Text('Sparepart: ${s.replacedPart}'),
-            Text('Status   : ${s.status}'),
-            Text('Garansi  : ${s.warrantyDays} Hari'),
-            const Divider(),
-            Text('Total    : ${ctrl.formatRupiah(s.totalCost)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          ],
-        ),
-        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Tutup'))],
+        content: Text(textNota),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: textNota));
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('e-Nota disalin!')));
+            },
+            child: const Text('Salin Nota'),
+          ),
+          FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Tutup')),
+        ],
       ),
+    );
+  }
+}
+
+class StoreTab extends StatefulWidget {
+  final AppDataController ctrl;
+  const StoreTab({super.key, required this.ctrl});
+  @override
+  State<StoreTab> createState() => _StoreTabState();
+}
+
+class _StoreTabState extends State<StoreTab> {
+  bool _usePoints = true;
+
+  @override
+  Widget build(BuildContext context) {
+    final u = widget.ctrl.currentUser!;
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        if (u.extraStoreDiscount > 0)
+          Card(
+            color: Colors.amber.withValues(alpha: 0.2),
+            child: ListTile(
+              leading: const Icon(Icons.local_offer, color: Colors.orange),
+              title: Text('Voucher Aktif: Potongan ${widget.ctrl.formatRupiah(u.extraStoreDiscount)}'),
+            ),
+          ),
+        SwitchListTile(
+          title: Text('Tukar Poin saat Beli (Saldo: ${u.points} pts)'),
+          subtitle: const Text('1 Poin = Rp 100 potongan harga'),
+          value: _usePoints,
+          onChanged: (v) => setState(() => _usePoints = v),
+        ),
+        if (widget.ctrl.products.isEmpty)
+          const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('Memuat katalog produk Store...'))),
+        ...widget.ctrl.products.map((p) => Card(
+              margin: const EdgeInsets.only(bottom: 10),
+              child: ListTile(
+                leading: CircleAvatar(
+                  child: p.imageUrl.isNotEmpty
+                      ? ClipOval(child: Image.network(p.imageUrl, width: 40, height: 40, fit: BoxFit.cover))
+                      : const Icon(Icons.shopping_bag),
+                ),
+                title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Text('${p.category} • Diskon ${p.discountPercent}%\n${widget.ctrl.formatRupiah(p.finalPrice)}'),
+                isThreeLine: true,
+                trailing: FilledButton(
+                  onPressed: () async {
+                    final msg = await widget.ctrl.checkoutProduct(p, _usePoints);
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+                    }
+                  },
+                  child: const Text('Beli'),
+                ),
+              ),
+            )),
+      ],
     );
   }
 }
