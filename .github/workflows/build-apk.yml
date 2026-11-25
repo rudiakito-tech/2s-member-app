@@ -24,6 +24,68 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Configure Gradle Google Maven Mirror
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat <<'EOF' > ~/.gradle/init.d/maven_central_mirror.gradle
+          def central = ~/^https:\/\/(repo\.maven\.apache\.org|repo1\.maven\.org)\/maven2\/?/
+          def mirror = 'https://maven-central.storage-download.googleapis.com/maven2/'
+          def fallback = 'mavenCentralBehindMirror'
+
+          def addFallback = { RepositoryHandler repositories ->
+            repositories.maven {
+              name = fallback
+              url = 'https://repo.maven.apache.org/maven2/'
+            }
+          }
+
+          def toMirror = { RepositoryHandler repositories ->
+            def hasFallback = false
+            repositories.all { repository ->
+              if (repository.name == fallback) {
+                return
+              }
+              if (repository instanceof MavenArtifactRepository) {
+                def url = repository.url.toString()
+                if (url =~ central) {
+                  repository.url = url.replaceFirst(central, mirror)
+                  if (!hasFallback) {
+                    hasFallback = true
+                    addFallback(repositories)
+                    return
+                  }
+                }
+              }
+              def last = repositories.findByName(fallback)
+              if (hasFallback && !repositories.last().is(last)) {
+                repositories.remove(last)
+                repositories.add(last)
+              }
+            }
+          }
+
+          beforeSettings { settings ->
+            toMirror(settings.buildscript.repositories)
+            toMirror(settings.pluginManagement.repositories)
+            toMirror(settings.dependencyResolutionManagement.repositories)
+          }
+
+          settingsEvaluated { settings ->
+            if (settings.pluginManagement.repositories.isEmpty()) {
+              settings.pluginManagement.repositories { repositories ->
+                maven { url = mirror }
+                addFallback(repositories)
+                gradlePluginPortal()
+              }
+            }
+          }
+
+          allprojects { project ->
+            toMirror(project.buildscript.repositories)
+            toMirror(project.repositories)
+          }
+          EOF
+
       - name: Generate Android wrapper if missing
         run: |
           if [ ! -d "android" ]; then
