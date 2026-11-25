@@ -4,18 +4,21 @@ class AppConfig {
   static const String appName = '2S Member';
   static const String shopName = '2S Service Handphone';
 
-  // Ubah ke true jika sudah mengisi konfigurasi Firebase di bawah
+  // Pastikan tetap true
   static const bool useFirebase = true;
 
-  // Konfigurasi Cloudinary (Gratis tanpa kartu kredit) untuk upload foto nanti
+  // WAJIB GANTI dengan nomor WA yang terhubung ke Fonnte (format 628..., tanpa + atau spasi)
+  static const String businessWaNumber = '6281234567890';
+
+  // Konfigurasi Cloudinary (untuk upload foto di tahap berikutnya)
   static const String cloudinaryCloudName = 'ISI_CLOUD_NAME_ANDA';
   static const String cloudinaryUploadPreset = 'ISI_UPLOAD_PRESET_ANDA';
 
-  // Konfigurasi Firebase Android (diambil dari Firebase Console -> Project Settings)
+  // BIARKAN kode Firebase Anda yang sudah benar di sini:
   static const FirebaseOptions firebaseAndroidOptions = FirebaseOptions(
-    apiKey: 'AIzaSyAjl__6_vVoRlD1tqXVQBCmSPume2yjfzk',
-    appId: '1:514037486909:android:393b7c1f0f0c123580e154',
-    messagingSenderId: '514037486909',
-    projectId: 'fir-member-78791',
+    apiKey: 'ISI_API_KEY_ANDA',
+    appId: 'ISI_APP_ID_ANDA',
+    messagingSenderId: 'ISI_SENDER_ID_ANDA',
+    projectId: 'ISI_PROJECT_ID_ANDA',
   );
 }
