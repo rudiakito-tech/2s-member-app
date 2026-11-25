@@ -6,11 +6,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'app_config.dart';
 
 class MemberUser {
-  String id, name, phone, email, referralCode, referredBy;
-  bool isEmailVerified;
-  int points, checkInStreak, extraStoreDiscount;
-  String lastCheckInDate, lastFreeSpinDate;
-  List<String> claimedMissions;
+  String id, name, phone, email, referralCode;
+  bool isEmailVerified, freeSpinUsedToday;
+  int points, checkInStreak;
+  DateTime? lastCheckInDate;
 
   MemberUser({
     required this.id,
@@ -20,12 +19,9 @@ class MemberUser {
     this.isEmailVerified = false,
     this.points = 150,
     required this.referralCode,
-    this.referredBy = '',
     this.checkInStreak = 0,
-    this.lastCheckInDate = '',
-    this.lastFreeSpinDate = '',
-    this.extraStoreDiscount = 0,
-    this.claimedMissions = const [],
+    this.lastCheckInDate,
+    this.freeSpinUsedToday = false,
   });
 
   String get tier {
@@ -34,34 +30,19 @@ class MemberUser {
     if (points >= 400) return 'Silver';
     return 'Bronze';
   }
-
-  factory MemberUser.fromMap(String id, Map<String, dynamic> m) => MemberUser(
-        id: id,
-        name: (m['name'] ?? 'Member 2S').toString(),
-        phone: (m['phone'] ?? id).toString(),
-        email: (m['email'] ?? '').toString(),
-        isEmailVerified: m['isEmailVerified'] == true,
-        points: _toInt(m['points'], 0),
-        referralCode: (m['referralCode'] ?? '2S-$id').toString(),
-        referredBy: (m['referredBy'] ?? '').toString(),
-        checkInStreak: _toInt(m['checkInStreak'], 0),
-        lastCheckInDate: (m['lastCheckInDate'] ?? '').toString(),
-        lastFreeSpinDate: (m['lastFreeSpinDate'] ?? '').toString(),
-        extraStoreDiscount: _toInt(m['extraStoreDiscount'], 0),
-        claimedMissions: List<String>.from(m['claimedMissions'] ?? []),
-      );
 }
 
 class ServiceOrder {
-  final String id, invoiceNo, userPhone, deviceName, complaint, replacedPart, status;
+  final String id, invoiceNo, customerPhone, deviceName, complaint, replacedPart;
+  String status;
   final int totalCost, warrantyDays;
   final DateTime createdAt;
-  final bool warrantyClaimed;
+  bool warrantyClaimed;
 
   ServiceOrder({
     required this.id,
     required this.invoiceNo,
-    required this.userPhone,
+    required this.customerPhone,
     required this.deviceName,
     required this.complaint,
     required this.replacedPart,
@@ -77,26 +58,12 @@ class ServiceOrder {
     final diff = warrantyExpiredAt.difference(DateTime.now()).inDays;
     return diff < 0 ? 0 : diff;
   }
-
-  factory ServiceOrder.fromMap(String id, Map<String, dynamic> m) => ServiceOrder(
-        id: id,
-        invoiceNo: (m['invoiceNo'] ?? id).toString(),
-        userPhone: (m['userPhone'] ?? '').toString(),
-        deviceName: (m['deviceName'] ?? 'Handphone').toString(),
-        complaint: (m['complaint'] ?? '-').toString(),
-        replacedPart: (m['replacedPart'] ?? '-').toString(),
-        status: (m['status'] ?? 'Menunggu Cek').toString(),
-        totalCost: _toInt(m['totalCost'], 0),
-        createdAt: _toDate(m['createdAt']),
-        warrantyDays: _toInt(m['warrantyDays'], 30),
-        warrantyClaimed: m['warrantyClaimed'] == true,
-      );
 }
 
 class StoreProduct {
-  final String id, name, category, imageUrl;
+  final String id, name, category;
   final int price, discountPercent;
-  final bool isActive;
+  final IconData icon;
 
   StoreProduct({
     required this.id,
@@ -104,21 +71,10 @@ class StoreProduct {
     required this.category,
     required this.price,
     this.discountPercent = 0,
-    this.imageUrl = '',
-    this.isActive = true,
+    required this.icon,
   });
 
   int get finalPrice => (price * (100 - discountPercent) / 100).round();
-
-  factory StoreProduct.fromMap(String id, Map<String, dynamic> m) => StoreProduct(
-        id: id,
-        name: (m['name'] ?? 'Produk 2S').toString(),
-        category: (m['category'] ?? 'Aksesoris').toString(),
-        price: _toInt(m['price'], 0),
-        discountPercent: _toInt(m['discountPercent'], 0),
-        imageUrl: (m['imageUrl'] ?? '').toString(),
-        isActive: m['isActive'] ?? true,
-      );
 }
 
 class MissionItem {
@@ -143,63 +99,38 @@ class PointHistory {
   PointHistory(this.title, this.amount, this.date);
 }
 
-int _toInt(dynamic v, [int def = 0]) {
-  if (v is int) return v;
-  if (v is num) return v.toInt();
-  return int.tryParse(v?.toString() ?? '') ?? def;
-}
-
-DateTime _toDate(dynamic v) {
-  if (v is Timestamp) return v.toDate();
-  if (v is String) return DateTime.tryParse(v) ?? DateTime.now();
-  return DateTime.now();
-}
-
 class AppDataController extends ChangeNotifier {
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
   MemberUser? currentUser;
-  String? pendingOtp;
+  bool isAdminMode = false;
+  int extraStoreDiscount = 0;
+
+  String? activeOtpSessionId;
+  String? activeOtpCode;
+  StreamSubscription<DocumentSnapshot>? _otpSub;
+  StreamSubscription<QuerySnapshot>? _srvSub;
+
   List<ServiceOrder> services = [];
-  List<StoreProduct> products = [];
   List<PointHistory> pointHistories = [];
   List<Map<String, dynamic>> leaderboard = [];
 
-  final _subs = <StreamSubscription>[];
-  FirebaseFirestore get _db => FirebaseFirestore.instance;
+  final List<StoreProduct> products = [
+    StoreProduct(id: 'p1', name: 'Kabel Data Fast Charging 65W', category: 'Aksesoris', price: 65000, discountPercent: 20, icon: Icons.cable),
+    StoreProduct(id: 'p2', name: 'Tempered Glass Anti-Spy', category: 'Pelindung', price: 45000, discountPercent: 10, icon: Icons.security),
+    StoreProduct(id: 'p3', name: 'Charger Adapter GaN 33W', category: 'Charger', price: 150000, discountPercent: 15, icon: Icons.battery_charging_full),
+    StoreProduct(id: 'p4', name: 'TWS Earbuds 2S Bass', category: 'Audio', price: 199000, discountPercent: 25, icon: Icons.headphones),
+  ];
 
-  String get _todayKey {
-    final n = DateTime.now();
-    return '${n.year}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
-  }
+  final List<MissionItem> missions = [
+    MissionItem(id: 'm1', title: 'Verifikasi Email', description: 'Verifikasi email asli di menu Profil', rewardPoints: 100),
+    MissionItem(id: 'm2', title: 'Check-In Pertama', description: 'Lakukan check-in harian hari ini', rewardPoints: 30),
+    MissionItem(id: 'm3', title: 'Ajak Teman Affiliate', description: 'Teman daftar pakai kode referral Anda', rewardPoints: 150),
+  ];
 
-  List<MissionItem> get missions {
-    final u = currentUser;
-    if (u == null) return [];
-    return [
-      MissionItem(
-        id: 'm1',
-        title: 'Verifikasi Email',
-        description: 'Verifikasi email aktif di menu Profil',
-        rewardPoints: 100,
-        isCompleted: u.isEmailVerified,
-        isClaimed: u.claimedMissions.contains('m1'),
-      ),
-      MissionItem(
-        id: 'm2',
-        title: 'Check-In Harian',
-        description: 'Lakukan check-in hari ini',
-        rewardPoints: 30,
-        isCompleted: u.lastCheckInDate == _todayKey,
-        isClaimed: u.claimedMissions.contains('m2_${_todayKey}'),
-      ),
-      MissionItem(
-        id: 'm3',
-        title: 'Servis / Belanja Pertama',
-        description: 'Punya minimal 1 riwayat transaksi servis',
-        rewardPoints: 150,
-        isCompleted: services.isNotEmpty,
-        isClaimed: u.claimedMissions.contains('m3'),
-      ),
-    ];
+  String normalizePhone(String p) {
+    var d = p.replaceAll(RegExp(r'\D'), '');
+    if (d.startsWith('0')) d = '62${d.substring(1)}';
+    return d;
   }
 
   String formatRupiah(int value) {
@@ -212,248 +143,156 @@ class AppDataController extends ChangeNotifier {
     return 'Rp $buf';
   }
 
-  String normalizePhone(String phone) {
-    var clean = phone.replaceAll(RegExp(r'\D'), '');
-    if (clean.startsWith('62')) clean = '0${clean.substring(2)}';
-    return clean;
-  }
+  // Mulai Reverse OTP via Firestore + Fonnte Webhook
+  Future<String> createReverseOtpSession(String inputName, String refCode) async {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    final rnd = Random();
+    final code = '2S-${List.generate(6, (_) => chars[rnd.nextInt(chars.length)]).join()}';
 
-  String requestWhatsappOtp(String phone) {
-    final code = (100000 + Random().nextInt(900000)).toString();
-    pendingOtp = code;
+    final doc = await _db.collection('otp_sessions').add({
+      'code': code,
+      'name': inputName.trim(),
+      'refCode': refCode.trim().toUpperCase(),
+      'status': 'pending',
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    activeOtpSessionId = doc.id;
+    activeOtpCode = code;
+
+    await _otpSub?.cancel();
+    _otpSub = doc.snapshots().listen((snap) async {
+      final data = snap.data();
+      if (data != null && data['status'] == 'verified') {
+        await _otpSub?.cancel();
+        final phone = normalizePhone(data['phone'] ?? '');
+        final waName = (data['waName'] ?? '').toString();
+        final finalName = inputName.trim().isNotEmpty ? inputName.trim() : (waName.isNotEmpty ? waName : 'Member 2S');
+        if (phone.isNotEmpty) {
+          await _completeLoginFromFirestore(phone, finalName, refCode.trim().toUpperCase());
+        }
+      }
+    });
+
+    notifyListeners();
     return code;
   }
 
-  Future<String?> verifyWhatsappOtp(String phone, String name, String code, String ref) async {
-    if (code.trim() != pendingOtp) return 'Kode OTP salah!';
-    final cleanPhone = normalizePhone(phone);
-    if (cleanPhone.length < 9) return 'Nomor WhatsApp tidak valid!';
+  Future<void> _completeLoginFromFirestore(String phone, String name, String refCode) async {
+    final userRef = _db.collection('users').doc(phone);
+    final doc = await userRef.get();
 
-    if (!AppConfig.useFirebase) return 'Aktifkan useFirebase = true di app_config.dart';
-
-    final userRef = _db.collection('users').doc(cleanPhone);
-    final snap = await userRef.get();
-
-    if (!snap.exists) {
-      final suffix = cleanPhone.substring(cleanPhone.length - 4);
-      final newUser = {
-        'name': name.trim().isEmpty ? 'Member 2S' : name.trim(),
-        'phone': cleanPhone,
-        'email': '',
-        'isEmailVerified': false,
-        'points': ref.trim().isNotEmpty ? 200 : 150,
-        'referralCode': '2S-$suffix',
-        'referredBy': ref.trim().toUpperCase(),
-        'checkInStreak': 0,
-        'lastCheckInDate': '',
-        'lastFreeSpinDate': '',
-        'extraStoreDiscount': 0,
-        'claimedMissions': <String>[],
-        'createdAt': FieldValue.serverTimestamp(),
-      };
-      await userRef.set(newUser);
-      await _addPointLog(cleanPhone, 'Bonus Member Baru 2S', ref.trim().isNotEmpty ? 200 : 150);
-
-      // Bonus affiliate ke pengajak jika kode referral valid
-      if (ref.trim().isNotEmpty) {
-        final refQ = await _db
-            .collection('users')
-            .where('referralCode', isEqualTo: ref.trim().toUpperCase())
-            .limit(1)
-            .get();
-        if (refQ.docs.isNotEmpty) {
-          final inviterDoc = refQ.docs.first;
-          await inviterDoc.reference.update({'points': FieldValue.increment(100)});
-          await _addPointLog(inviterDoc.id, 'Komisi Affiliate (${cleanPhone})', 100);
+    if (!doc.exists) {
+      final suffix = phone.length >= 4 ? phone.substring(phone.length - 4) : phone;
+      int startPts = 150;
+      if (refCode.isNotEmpty) {
+        final refSnap = await _db.collection('users').where('referralCode', isEqualTo: refCode).limit(1).get();
+        if (refSnap.docs.isNotEmpty) {
+          startPts = 200;
+          await refSnap.docs.first.reference.update({'points': FieldValue.increment(100)});
+          await refSnap.docs.first.reference.collection('point_histories').add({
+            'title': 'Komisi Affiliate ($name)',
+            'amount': 100,
+            'date': FieldValue.serverTimestamp(),
+          });
         }
       }
+      await userRef.set({
+        'name': name,
+        'phone': phone,
+        'email': '',
+        'isEmailVerified': false,
+        'points': startPts,
+        'referralCode': '2S-$suffix',
+        'checkInStreak': 0,
+        'lastCheckInDate': null,
+        'freeSpinUsedToday': false,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      await userRef.collection('point_histories').add({
+        'title': startPts > 150 ? 'Bonus Member Baru + Referral' : 'Bonus Member Baru 2S',
+        'amount': startPts,
+        'date': FieldValue.serverTimestamp(),
+      });
     }
 
-    await _seedInitialStoreAndSampleService(cleanPhone);
-    _startRealtimeListeners(cleanPhone);
-    return null;
+    final fresh = await userRef.get();
+    final d = fresh.data()!;
+    currentUser = MemberUser(
+      id: phone,
+      name: d['name'] ?? name,
+      phone: phone,
+      email: d['email'] ?? '',
+      isEmailVerified: d['isEmailVerified'] ?? false,
+      points: (d['points'] ?? 150) as int,
+      referralCode: d['referralCode'] ?? '2S-$phone',
+      checkInStreak: (d['checkInStreak'] ?? 0) as int,
+      lastCheckInDate: (d['lastCheckInDate'] as Timestamp?)?.toDate(),
+      freeSpinUsedToday: d['freeSpinUsedToday'] ?? false,
+    );
+    missions[0].isCompleted = currentUser!.isEmailVerified;
+
+    await _loadUserHistories();
+    await _loadLeaderboard();
+    _listenServices();
+    notifyListeners();
   }
 
-  Future<void> _seedInitialStoreAndSampleService(String phone) async {
-    final prodSnap = await _db.collection('products').limit(1).get();
-    if (prodSnap.docs.isEmpty) {
-      final samples = [
-        {'name': 'Kabel Data Fast Charging 65W', 'category': 'Aksesoris', 'price': 65000, 'discountPercent': 20, 'isActive': true},
-        {'name': 'Tempered Glass Anti-Spy', 'category': 'Pelindung', 'price': 45000, 'discountPercent': 10, 'isActive': true},
-        {'name': 'Charger Adapter GaN 33W', 'category': 'Charger', 'price': 150000, 'discountPercent': 15, 'isActive': true},
-      ];
-      for (final p in samples) {
-        await _db.collection('products').add(p);
-      }
-    }
-  }
-
-  void _startRealtimeListeners(String phone) {
-    for (final s in _subs) {
-      s.cancel();
-    }
-    _subs.clear();
-
-    // 1. User profile & points real-time
-    _subs.add(_db.collection('users').doc(phone).snapshots().listen((doc) {
-      if (doc.exists && doc.data() != null) {
-        currentUser = MemberUser.fromMap(doc.id, doc.data()!);
-        notifyListeners();
-      }
-    }));
-
-    // 2. Transaksi Servis real-time (sort di Dart agar tidak perlu composite index)
-    _subs.add(_db.collection('services').where('userPhone', isEqualTo: phone).snapshots().listen((snap) {
-      services = snap.docs.map((d) => ServiceOrder.fromMap(d.id, d.data())).toList()
-        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      notifyListeners();
-    }));
-
-    // 3. Katalog Store real-time
-    _subs.add(_db.collection('products').snapshots().listen((snap) {
-      products = snap.docs
-          .map((d) => StoreProduct.fromMap(d.id, d.data()))
-          .where((p) => p.isActive)
-          .toList();
-      notifyListeners();
-    }));
-
-    // 4. Riwayat Poin real-time (subcollection)
-    _subs.add(_db
-        .collection('users')
-        .doc(phone)
-        .collection('point_histories')
-        .orderBy('createdAt', descending: true)
-        .limit(30)
-        .snapshots()
-        .listen((snap) {
-      pointHistories = snap.docs
-          .map((d) => PointHistory(
-                (d.data()['title'] ?? '').toString(),
-                _toInt(d.data()['amount'], 0),
-                _toDate(d.data()['createdAt']),
-              ))
-          .toList();
-      notifyListeners();
-    }));
-
-    // 5. Leaderboard real-time
-    _subs.add(_db
-        .collection('users')
-        .orderBy('points', descending: true)
-        .limit(15)
-        .snapshots()
-        .listen((snap) {
-      leaderboard = snap.docs.map((d) {
-        final u = MemberUser.fromMap(d.id, d.data());
-        return {'name': u.name, 'points': u.points, 'tier': u.tier, 'phone': u.phone};
+  void _listenServices() {
+    _srvSub?.cancel();
+    _srvSub = _db.collection('services').orderBy('createdAt', descending: true).snapshots().listen((snap) {
+      services = snap.docs.map((doc) {
+        final d = doc.data();
+        return ServiceOrder(
+          id: doc.id,
+          invoiceNo: d['invoiceNo'] ?? '-',
+          customerPhone: d['customerPhone'] ?? '',
+          deviceName: d['deviceName'] ?? '-',
+          complaint: d['complaint'] ?? '-',
+          replacedPart: d['replacedPart'] ?? '-',
+          status: d['status'] ?? 'Menunggu Cek',
+          totalCost: (d['totalCost'] ?? 0) as int,
+          createdAt: (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+          warrantyDays: (d['warrantyDays'] ?? 30) as int,
+          warrantyClaimed: d['warrantyClaimed'] ?? false,
+        );
       }).toList();
       notifyListeners();
-    }));
-  }
-
-  Future<void> _addPointLog(String phone, String title, int amount) async {
-    await _db.collection('users').doc(phone).collection('point_histories').add({
-      'title': title,
-      'amount': amount,
-      'createdAt': FieldValue.serverTimestamp(),
     });
   }
 
-  Future<void> addPoints(int amount, String title) async {
-    final u = currentUser;
-    if (u == null) return;
-    await _db.collection('users').doc(u.id).update({'points': FieldValue.increment(amount)});
-    await _addPointLog(u.id, title, amount);
+  Future<void> _loadUserHistories() async {
+    if (currentUser == null) return;
+    final snap = await _db
+        .collection('users')
+        .doc(currentUser!.id)
+        .collection('point_histories')
+        .orderBy('date', descending: true)
+        .limit(20)
+        .get();
+    pointHistories = snap.docs.map((doc) {
+      final d = doc.data();
+      return PointHistory(
+        d['title'] ?? 'Poin',
+        (d['amount'] ?? 0) as int,
+        (d['date'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      );
+    }).toList();
   }
 
-  bool canCheckInToday() => currentUser != null && currentUser!.lastCheckInDate != _todayKey;
-
-  Future<int> performDailyCheckIn() async {
-    final u = currentUser;
-    if (u == null || !canCheckInToday()) return 0;
-    final nextStreak = (u.checkInStreak % 7) + 1;
-    final reward = 15 + (nextStreak * 5);
-    await _db.collection('users').doc(u.id).update({
-      'checkInStreak': nextStreak,
-      'lastCheckInDate': _todayKey,
-      'points': FieldValue.increment(reward),
-    });
-    await _addPointLog(u.id, 'Check-in Hari ke-$nextStreak', reward);
-    return reward;
+  Future<void> _loadLeaderboard() async {
+    final snap = await _db.collection('users').orderBy('points', descending: true).limit(10).get();
+    leaderboard = snap.docs.map((doc) {
+      final d = doc.data();
+      final pts = (d['points'] ?? 0) as int;
+      final tier = pts >= 2000 ? 'Platinum' : (pts >= 1000 ? 'Gold' : (pts >= 400 ? 'Silver' : 'Bronze'));
+      return {'name': d['name'] ?? 'Member', 'points': pts, 'tier': tier};
+    }).toList();
   }
 
-  Future<void> claimMission(MissionItem m) async {
-    final u = currentUser;
-    if (u == null || !m.isCompleted || m.isClaimed) return;
-    final key = m.id == 'm2' ? 'm2_${_todayKey}' : m.id;
-    await _db.collection('users').doc(u.id).update({
-      'claimedMissions': FieldValue.arrayUnion([key]),
-      'points': FieldValue.increment(m.rewardPoints),
-    });
-    await _addPointLog(u.id, 'Klaim Misi: ${m.title}', m.rewardPoints);
-  }
-
-  bool get freeSpinAvailable => currentUser != null && currentUser!.lastFreeSpinDate != _todayKey;
-
-  Future<String> spinWheelReward() async {
-    final u = currentUser;
-    if (u == null) return '';
-    if (!freeSpinAvailable) {
-      if (u.points < 20) return 'Poin tidak cukup (butuh 20 poin)';
-      await addPoints(-20, 'Tiket Putar Mini Game');
-    } else {
-      await _db.collection('users').doc(u.id).update({'lastFreeSpinDate': _todayKey});
-    }
-
-    final rewards = [10, 25, 50, 100, 0];
-    final win = rewards[Random().nextInt(rewards.length)];
-    if (win == 0) {
-      await _db.collection('users').doc(u.id).update({'extraStoreDiscount': 15000});
-      return 'Menang Voucher Diskon Store Rp 15.000!';
-    } else {
-      await addPoints(win, 'Hadiah Mini Game Spin Wheel');
-      return 'Selamat! Dapat +$win Poin!';
-    }
-  }
-
-  Future<void> claimWarranty(ServiceOrder s) async {
-    await _db.collection('services').doc(s.id).update({'warrantyClaimed': true});
-  }
-
-  Future<String> checkoutProduct(StoreProduct p, bool usePoints) async {
-    final u = currentUser;
-    if (u == null) return 'Silakan login';
-    int total = p.finalPrice - u.extraStoreDiscount;
-    if (total < 0) total = 0;
-
-    int usedPts = 0;
-    if (usePoints && u.points > 0) {
-      final maxCut = min(total, u.points * 100);
-      usedPts = (maxCut / 100).floor();
-      total -= usedPts * 100;
-      if (usedPts > 0) await addPoints(-usedPts, 'Tukar Poin Beli ${p.name}');
-    }
-    if (u.extraStoreDiscount > 0) {
-      await _db.collection('users').doc(u.id).update({'extraStoreDiscount': 0});
-    }
-    await _db.collection('orders').add({
-      'userPhone': u.phone,
-      'userName': u.name,
-      'productId': p.id,
-      'productName': p.name,
-      'finalPaid': total,
-      'pointsUsed': usedPts,
-      'status': 'Diproses',
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-    await addPoints(20, 'Cashback Poin Belanja Store');
-    return 'Order ${p.name} masuk! Total bayar: ${formatRupiah(total)}';
-  }
-
-  Future<String> sendFirebaseEmailVerification(String email, String password) async {
-    final auth = FirebaseAuth.instance;
+  Future<String> sendRealEmailVerification(String email, String password) async {
     try {
+      final auth = FirebaseAuth.instance;
       UserCredential cred;
       try {
         cred = await auth.createUserWithEmailAndPassword(email: email.trim(), password: password);
@@ -461,42 +300,161 @@ class AppDataController extends ChangeNotifier {
         if (e.code == 'email-already-in-use') {
           cred = await auth.signInWithEmailAndPassword(email: email.trim(), password: password);
         } else {
-          return e.message ?? 'Gagal mendaftarkan email';
+          return 'Gagal: ${e.message}';
         }
       }
-      await cred.user?.sendEmailVerification();
-      if (currentUser != null) {
-        await _db.collection('users').doc(currentUser!.id).update({'email': email.trim()});
+      if (cred.user != null && !cred.user!.emailVerified) {
+        await cred.user!.sendEmailVerification();
+        return 'Link verifikasi dikirim ke $email! Cek Inbox/Spam lalu klik tombol Cek Verifikasi.';
+      } else if (cred.user?.emailVerified == true) {
+        await markEmailVerifiedInDb(email.trim());
+        return 'Email sudah terverifikasi!';
       }
-      return 'OK';
+      return 'Silakan cek email Anda.';
     } catch (e) {
       return 'Error: $e';
     }
   }
 
-  Future<bool> checkAndCompleteEmailVerification() async {
+  Future<bool> checkEmailVerificationStatus() async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null || currentUser == null) return false;
+    if (user == null) return false;
     await user.reload();
     final refreshed = FirebaseAuth.instance.currentUser;
     if (refreshed != null && refreshed.emailVerified) {
-      await _db.collection('users').doc(currentUser!.id).update({
-        'email': refreshed.email ?? currentUser!.email,
-        'isEmailVerified': true,
-      });
-      await addPoints(50, 'Bonus Verifikasi Email');
+      await markEmailVerifiedInDb(refreshed.email ?? '');
       return true;
     }
     return false;
   }
 
-  void logout() {
-    for (final s in _subs) {
-      s.cancel();
+  Future<void> markEmailVerifiedInDb(String email) async {
+    if (currentUser == null || currentUser!.isEmailVerified) return;
+    currentUser!.email = email;
+    currentUser!.isEmailVerified = true;
+    missions[0].isCompleted = true;
+    await _db.collection('users').doc(currentUser!.id).update({
+      'email': email,
+      'isEmailVerified': true,
+    });
+    await addPoints(50, 'Bonus Verifikasi Email');
+  }
+
+  bool canCheckInToday() {
+    final last = currentUser?.lastCheckInDate;
+    if (last == null) return true;
+    final now = DateTime.now();
+    return !(last.year == now.year && last.month == now.month && last.day == now.day);
+  }
+
+  Future<int> performDailyCheckIn() async {
+    if (currentUser == null || !canCheckInToday()) return 0;
+    currentUser!.checkInStreak = (currentUser!.checkInStreak % 7) + 1;
+    currentUser!.lastCheckInDate = DateTime.now();
+    missions[1].isCompleted = true;
+    final reward = 15 + (currentUser!.checkInStreak * 5);
+    await _db.collection('users').doc(currentUser!.id).update({
+      'checkInStreak': currentUser!.checkInStreak,
+      'lastCheckInDate': Timestamp.fromDate(currentUser!.lastCheckInDate!),
+    });
+    await addPoints(reward, 'Check-in Hari ke-${currentUser!.checkInStreak}');
+    return reward;
+  }
+
+  Future<void> claimMission(MissionItem m) async {
+    if (!m.isCompleted || m.isClaimed) return;
+    m.isClaimed = true;
+    await addPoints(m.rewardPoints, 'Klaim Misi: ${m.title}');
+  }
+
+  Future<String> spinWheelReward() async {
+    if (currentUser == null) return '';
+    if (currentUser!.freeSpinUsedToday) {
+      if (currentUser!.points < 20) return 'Poin tidak cukup (butuh 20 poin)';
+      await addPoints(-20, 'Tiket Putar Mini Game');
+    } else {
+      currentUser!.freeSpinUsedToday = true;
+      await _db.collection('users').doc(currentUser!.id).update({'freeSpinUsedToday': true});
     }
-    _subs.clear();
-    currentUser = null;
-    services = [];
+    final rewards = [10, 25, 50, 100, 0];
+    final win = rewards[Random().nextInt(rewards.length)];
+    if (win == 0) {
+      extraStoreDiscount = 15000;
+      notifyListeners();
+      return 'Menang Voucher Diskon Store Rp 15.000!';
+    } else {
+      await addPoints(win, 'Hadiah Mini Game Spin Wheel');
+      return 'Selamat! Dapat +$win Poin!';
+    }
+  }
+
+  Future<void> addPoints(int amount, String title) async {
+    if (currentUser == null) return;
+    currentUser!.points += amount;
+    pointHistories.insert(0, PointHistory(title, amount, DateTime.now()));
+    await _db.collection('users').doc(currentUser!.id).update({'points': FieldValue.increment(amount)});
+    await _db.collection('users').doc(currentUser!.id).collection('point_histories').add({
+      'title': title,
+      'amount': amount,
+      'date': FieldValue.serverTimestamp(),
+    });
+    await _loadLeaderboard();
     notifyListeners();
+  }
+
+  Future<void> addNewService(String custPhone, String device, String complaint, String part, int cost, int warranty) async {
+    final inv = '2S-INV-${100 + services.length + 1}';
+    await _db.collection('services').add({
+      'invoiceNo': inv,
+      'customerPhone': normalizePhone(custPhone),
+      'deviceName': device,
+      'complaint': complaint,
+      'replacedPart': part,
+      'status': 'Menunggu Cek',
+      'totalCost': cost,
+      'warrantyDays': warranty,
+      'warrantyClaimed': false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> updateServiceStatus(ServiceOrder s, String newStatus) async {
+    await _db.collection('services').doc(s.id).update({'status': newStatus});
+    if (newStatus == 'Selesai' && s.customerPhone.isNotEmpty) {
+      await _db.collection('users').doc(s.customerPhone).set({
+        'points': FieldValue.increment(50),
+      }, SetOptions(merge: true));
+      if (s.customerPhone == currentUser?.id) {
+        currentUser!.points += 50;
+        pointHistories.insert(0, PointHistory('Poin Servis ${s.invoiceNo}', 50, DateTime.now()));
+      }
+    }
+    notifyListeners();
+  }
+
+  Future<void> claimWarranty(ServiceOrder s) async {
+    await _db.collection('services').doc(s.id).update({'warrantyClaimed': true});
+  }
+
+  Future<String> checkoutProduct(StoreProduct p, bool usePoints) async {
+    if (currentUser == null) return 'Silakan login';
+    int total = p.finalPrice - extraStoreDiscount;
+    if (total < 0) total = 0;
+    if (usePoints && currentUser!.points > 0) {
+      final maxCut = min(total, currentUser!.points * 100);
+      final usedPts = (maxCut / 100).floor();
+      total -= usedPts * 100;
+      if (usedPts > 0) await addPoints(-usedPts, 'Tukar Poin Beli ${p.name}');
+    }
+    extraStoreDiscount = 0;
+    await addPoints(20, 'Cashback Poin Belanja Store');
+    return 'Order ${p.name} berhasil! Total bayar: ${formatRupiah(total)}';
+  }
+
+  @override
+  void dispose() {
+    _otpSub?.cancel();
+    _srvSub?.cancel();
+    super.dispose();
   }
 }
