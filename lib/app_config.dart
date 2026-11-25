@@ -16,9 +16,9 @@ class AppConfig {
 
   // BIARKAN kode Firebase Anda yang sudah benar di sini:
   static const FirebaseOptions firebaseAndroidOptions = FirebaseOptions(
-    apiKey: 'ISI_API_KEY_ANDA',
-    appId: 'ISI_APP_ID_ANDA',
-    messagingSenderId: 'ISI_SENDER_ID_ANDA',
-    projectId: 'ISI_PROJECT_ID_ANDA',
+    apiKey: 'AIzaSyAjl__6_vVoRlD1tqXVQBCmSPume2yjfzk',
+    appId: '1:514037486909:android:393b7c1f0f0c123580e154',
+    messagingSenderId: '514037486909',
+    projectId: 'fir-member-78791',
   );
 }
