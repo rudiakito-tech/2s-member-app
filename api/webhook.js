@@ -10,72 +10,55 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 module.exports = async (req, res) => {
-  // 1. Verifikasi Webhook oleh Meta (GET)
-  if (req.method === 'GET') {
-    const mode = req.query['hub.mode'];
-    const token = req.query['hub.verify_token'];
-    const challenge = req.query['hub.challenge'];
-
-    if (mode === 'subscribe' && token === process.env.META_VERIFY_TOKEN) {
-      return res.status(200).send(challenge);
-    }
-    return res.status(403).send('Forbidden');
+  if (req.method !== 'POST') {
+    return res.status(200).send('Fonnte Reverse OTP Webhook Ready');
   }
 
-  // 2. Terima Pesan Masuk dari WhatsApp User (POST)
-  if (req.method === 'POST') {
-    try {
-      const msg = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-      if (msg && msg.type === 'text') {
-        const fromPhone = msg.from; // Nomor WA asli user (format: 628xxx)
-        const textBody = (msg.text?.body || '').toUpperCase();
-        const match = textBody.match(/2S-[A-Z0-9]{6}/);
+  try {
+    const raw = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {});
+    const sender = String(raw.sender || '').replace(/\D/g, '');
+    const message = String(raw.message || '').toUpperCase();
+    const senderName = String(raw.name || '');
 
-        if (match) {
-          const otpCode = match[0];
-          const snap = await db
-            .collection('otp_sessions')
-            .where('code', '==', otpCode)
-            .where('status', '==', 'pending')
-            .limit(1)
-            .get();
+    // Cari kode format 2S-XXXXXX di pesan WA yang masuk
+    const match = message.match(/2S-[A-Z0-9]{6}/);
+    if (match && sender) {
+      const otpCode = match[0];
+      const snap = await db
+        .collection('otp_sessions')
+        .where('code', '==', otpCode)
+        .where('status', '==', 'pending')
+        .limit(1)
+        .get();
 
-          if (!snap.empty) {
-            const docRef = snap.docs[0].ref;
-            await docRef.update({
-              status: 'verified',
-              phone: fromPhone,
-              verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
-            });
+      if (!snap.empty) {
+        await snap.docs[0].ref.update({
+          status: 'verified',
+          phone: sender,
+          waName: senderName,
+          verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
 
-            // Opsional: Balas pesan konfirmasi (1.000 balasan service/bln gratis)
-            if (process.env.META_WA_TOKEN && process.env.META_PHONE_NUMBER_ID) {
-              await fetch(
-                `https://graph.facebook.com/v21.0/${process.env.META_PHONE_NUMBER_ID}/messages`,
-                {
-                  method: 'POST',
-                  headers: {
-                    Authorization: `Bearer ${process.env.META_WA_TOKEN}`,
-                    'Content-Type': 'application/json',
-                  },
-                  body: JSON.stringify({
-                    messaging_product: 'whatsapp',
-                    to: fromPhone,
-                    text: {
-                      body: '✅ Verifikasi 2S Member berhasil! Silakan kembali ke aplikasi.',
-                    },
-                  }),
-                }
-              );
-            }
-          }
+        // Opsional: Balas WA konfirmasi (hapus/kosongkan FONNTE_TOKEN jika ingin hemat 0 kuota)
+        if (process.env.FONNTE_TOKEN) {
+          const params = new URLSearchParams();
+          params.append('target', sender);
+          params.append(
+            'message',
+            '✅ Verifikasi *2S Member* berhasil! Silakan kembali ke aplikasi.'
+          );
+          await fetch('https://api.fonnte.com/send', {
+            method: 'POST',
+            headers: { Authorization: process.env.FONNTE_TOKEN },
+            body: params,
+          });
         }
       }
-    } catch (err) {
-      console.error('Webhook Error:', err);
     }
-    return res.status(200).send('EVENT_RECEIVED');
+  } catch (err) {
+    console.error('Fonnte Webhook Error:', err);
   }
 
-  return res.status(405).send('Method Not Allowed');
+  // Fonnte mewajibkan response HTTP 200
+  return res.status(200).json({ status: true });
 };
