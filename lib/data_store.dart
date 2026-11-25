@@ -1,13 +1,16 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'app_config.dart';
 
 class MemberUser {
   String id, name, phone, email, referralCode;
-  bool isEmailVerified, freeSpinUsedToday;
+  bool isEmailVerified, isWaVerified, freeSpinUsedToday;
   int points, checkInStreak;
   DateTime? lastCheckInDate;
 
@@ -17,6 +20,7 @@ class MemberUser {
     required this.phone,
     this.email = '',
     this.isEmailVerified = false,
+    this.isWaVerified = true,
     this.points = 150,
     required this.referralCode,
     this.checkInStreak = 0,
@@ -102,17 +106,19 @@ class PointHistory {
 class AppDataController extends ChangeNotifier {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   MemberUser? currentUser;
+  bool isInitialized = false;
   bool isAdminMode = false;
   int extraStoreDiscount = 0;
 
-  String? activeOtpSessionId;
-  String? activeOtpCode;
   StreamSubscription<DocumentSnapshot>? _otpSub;
   StreamSubscription<QuerySnapshot>? _srvSub;
 
   List<ServiceOrder> services = [];
   List<PointHistory> pointHistories = [];
   List<Map<String, dynamic>> leaderboard = [];
+
+  bool get isGuest => currentUser == null;
+  bool get canUseAdmin => !isGuest && AppConfig.adminWaNumbers.contains(currentUser!.phone);
 
   final List<StoreProduct> products = [
     StoreProduct(id: 'p1', name: 'Kabel Data Fast Charging 65W', category: 'Aksesoris', price: 65000, discountPercent: 20, icon: Icons.cable),
@@ -133,6 +139,11 @@ class AppDataController extends ChangeNotifier {
     return d;
   }
 
+  String _hashPassword(String phone, String password) {
+    final bytes = utf8.encode('2S_HP_SALT_${phone}_$password');
+    return sha256.convert(bytes).toString();
+  }
+
   String formatRupiah(int value) {
     final s = value.toString();
     final buf = StringBuffer();
@@ -143,46 +154,106 @@ class AppDataController extends ChangeNotifier {
     return 'Rp $buf';
   }
 
-  // Mulai Reverse OTP via Firestore + Fonnte Webhook
-  Future<String> createReverseOtpSession(String inputName, String refCode) async {
+  Future<void> initSession() async {
+    try {
+      await _loadLeaderboard();
+      final prefs = await SharedPreferences.getInstance();
+      final savedPhone = prefs.getString('2s_logged_phone');
+      if (savedPhone != null && savedPhone.isNotEmpty) {
+        final doc = await _db.collection('users').doc(savedPhone).get();
+        if (doc.exists) {
+          await _applyLoggedInUser(savedPhone, doc.data()!);
+        }
+      }
+    } catch (_) {}
+    isInitialized = true;
+    notifyListeners();
+  }
+
+  // LOGIN TANPA OTP (No. WA + Password)
+  Future<String?> loginWithPassword(String rawPhone, String password) async {
+    final phone = normalizePhone(rawPhone);
+    if (phone.length < 9) return 'Nomor WhatsApp tidak valid.';
+    if (password.length < 6) return 'Password minimal 6 karakter.';
+
+    final doc = await _db.collection('users').doc(phone).get();
+    if (!doc.exists) {
+      return 'Nomor WA belum terdaftar. Silakan pindah ke tab Daftar.';
+    }
+    final data = doc.data()!;
+    final storedHash = (data['passwordHash'] ?? '').toString();
+    if (storedHash.isEmpty) {
+      return 'Akun lama belum punya password. Gunakan tab Reset / Verifikasi WA.';
+    }
+    if (storedHash != _hashPassword(phone, password)) {
+      return 'Password salah! Periksa kembali atau gunakan Reset WA.';
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('2s_logged_phone', phone);
+    await _applyLoggedInUser(phone, data);
+    return null;
+  }
+
+  // REVERSE OTP WA (Hanya untuk Daftar Baru atau Reset/Verifikasi WA)
+  Future<String> startReverseOtp({
+    required String mode, // 'register' atau 'reset'
+    String name = '',
+    required String password,
+    String refCode = '',
+    required void Function(String? error) onCompleted,
+  }) async {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     final rnd = Random();
     final code = '2S-${List.generate(6, (_) => chars[rnd.nextInt(chars.length)]).join()}';
 
-    final doc = await _db.collection('otp_sessions').add({
+    final sessionDoc = await _db.collection('otp_sessions').add({
       'code': code,
-      'name': inputName.trim(),
-      'refCode': refCode.trim().toUpperCase(),
+      'mode': mode,
       'status': 'pending',
       'createdAt': FieldValue.serverTimestamp(),
     });
 
-    activeOtpSessionId = doc.id;
-    activeOtpCode = code;
-
     await _otpSub?.cancel();
-    _otpSub = doc.snapshots().listen((snap) async {
-      final data = snap.data();
-      if (data != null && data['status'] == 'verified') {
+    _otpSub = sessionDoc.snapshots().listen((snap) async {
+      final d = snap.data();
+      if (d != null && d['status'] == 'verified') {
         await _otpSub?.cancel();
-        final phone = normalizePhone(data['phone'] ?? '');
-        final waName = (data['waName'] ?? '').toString();
-        final finalName = inputName.trim().isNotEmpty ? inputName.trim() : (waName.isNotEmpty ? waName : 'Member 2S');
-        if (phone.isNotEmpty) {
-          await _completeLoginFromFirestore(phone, finalName, refCode.trim().toUpperCase());
+        final phone = normalizePhone(d['phone'] ?? '');
+        final waName = (d['waName'] ?? '').toString();
+        if (phone.isEmpty) {
+          onCompleted('Nomor WA gagal terbaca.');
+          return;
         }
+        final err = await _finishWaVerification(
+          mode: mode,
+          phone: phone,
+          name: name.trim().isNotEmpty ? name.trim() : (waName.isNotEmpty ? waName : 'Member 2S'),
+          password: password,
+          refCode: refCode.trim().toUpperCase(),
+        );
+        onCompleted(err);
       }
     });
 
-    notifyListeners();
     return code;
   }
 
-  Future<void> _completeLoginFromFirestore(String phone, String name, String refCode) async {
+  Future<String?> _finishWaVerification({
+    required String mode,
+    required String phone,
+    required String name,
+    required String password,
+    required String refCode,
+  }) async {
     final userRef = _db.collection('users').doc(phone);
     final doc = await userRef.get();
+    final passHash = _hashPassword(phone, password);
 
-    if (!doc.exists) {
+    if (mode == 'register') {
+      if (doc.exists && (doc.data()?['passwordHash'] ?? '').toString().isNotEmpty) {
+        return 'Nomor WA $phone sudah terdaftar! Silakan Masuk pakai password.';
+      }
       final suffix = phone.length >= 4 ? phone.substring(phone.length - 4) : phone;
       int startPts = 150;
       if (refCode.isNotEmpty) {
@@ -200,30 +271,47 @@ class AppDataController extends ChangeNotifier {
       await userRef.set({
         'name': name,
         'phone': phone,
-        'email': '',
-        'isEmailVerified': false,
-        'points': startPts,
-        'referralCode': '2S-$suffix',
-        'checkInStreak': 0,
-        'lastCheckInDate': null,
-        'freeSpinUsedToday': false,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-      await userRef.collection('point_histories').add({
-        'title': startPts > 150 ? 'Bonus Member Baru + Referral' : 'Bonus Member Baru 2S',
-        'amount': startPts,
-        'date': FieldValue.serverTimestamp(),
-      });
+        'passwordHash': passHash,
+        'isWaVerified': true,
+        'email': doc.data()?['email'] ?? '',
+        'isEmailVerified': doc.data()?['isEmailVerified'] ?? false,
+        'points': doc.exists ? (doc.data()?['points'] ?? startPts) : startPts,
+        'referralCode': doc.data()?['referralCode'] ?? '2S-$suffix',
+        'checkInStreak': doc.data()?['checkInStreak'] ?? 0,
+        'lastCheckInDate': doc.data()?['lastCheckInDate'],
+        'freeSpinUsedToday': doc.data()?['freeSpinUsedToday'] ?? false,
+        'createdAt': doc.data()?['createdAt'] ?? FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      if (!doc.exists) {
+        await userRef.collection('point_histories').add({
+          'title': startPts > 150 ? 'Bonus Daftar + Referral' : 'Bonus Member Baru 2S',
+          'amount': startPts,
+          'date': FieldValue.serverTimestamp(),
+        });
+      }
+    } else {
+      // Mode reset password / verifikasi WA ulang
+      if (!doc.exists) {
+        return 'Nomor WA $phone belum terdaftar. Silakan Daftar baru.';
+      }
+      await userRef.update({'passwordHash': passHash, 'isWaVerified': true});
     }
 
     final fresh = await userRef.get();
-    final d = fresh.data()!;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('2s_logged_phone', phone);
+    await _applyLoggedInUser(phone, fresh.data()!);
+    return null;
+  }
+
+  Future<void> _applyLoggedInUser(String phone, Map<String, dynamic> d) async {
     currentUser = MemberUser(
       id: phone,
-      name: d['name'] ?? name,
+      name: d['name'] ?? 'Member 2S',
       phone: phone,
       email: d['email'] ?? '',
       isEmailVerified: d['isEmailVerified'] ?? false,
+      isWaVerified: d['isWaVerified'] ?? true,
       points: (d['points'] ?? 150) as int,
       referralCode: d['referralCode'] ?? '2S-$phone',
       checkInStreak: (d['checkInStreak'] ?? 0) as int,
@@ -231,10 +319,20 @@ class AppDataController extends ChangeNotifier {
       freeSpinUsedToday: d['freeSpinUsedToday'] ?? false,
     );
     missions[0].isCompleted = currentUser!.isEmailVerified;
-
     await _loadUserHistories();
     await _loadLeaderboard();
     _listenServices();
+    notifyListeners();
+  }
+
+  Future<void> logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('2s_logged_phone');
+    await _srvSub?.cancel();
+    currentUser = null;
+    isAdminMode = false;
+    services = [];
+    pointHistories = [];
     notifyListeners();
   }
 
@@ -263,20 +361,10 @@ class AppDataController extends ChangeNotifier {
 
   Future<void> _loadUserHistories() async {
     if (currentUser == null) return;
-    final snap = await _db
-        .collection('users')
-        .doc(currentUser!.id)
-        .collection('point_histories')
-        .orderBy('date', descending: true)
-        .limit(20)
-        .get();
+    final snap = await _db.collection('users').doc(currentUser!.id).collection('point_histories').orderBy('date', descending: true).limit(20).get();
     pointHistories = snap.docs.map((doc) {
       final d = doc.data();
-      return PointHistory(
-        d['title'] ?? 'Poin',
-        (d['amount'] ?? 0) as int,
-        (d['date'] as Timestamp?)?.toDate() ?? DateTime.now(),
-      );
+      return PointHistory(d['title'] ?? 'Poin', (d['amount'] ?? 0) as int, (d['date'] as Timestamp?)?.toDate() ?? DateTime.now());
     }).toList();
   }
 
@@ -305,7 +393,7 @@ class AppDataController extends ChangeNotifier {
       }
       if (cred.user != null && !cred.user!.emailVerified) {
         await cred.user!.sendEmailVerification();
-        return 'Link verifikasi dikirim ke $email! Cek Inbox/Spam lalu klik tombol Cek Verifikasi.';
+        return 'Link verifikasi dikirim ke $email! Cek Inbox/Spam.';
       } else if (cred.user?.emailVerified == true) {
         await markEmailVerifiedInDb(email.trim());
         return 'Email sudah terverifikasi!';
@@ -333,10 +421,7 @@ class AppDataController extends ChangeNotifier {
     currentUser!.email = email;
     currentUser!.isEmailVerified = true;
     missions[0].isCompleted = true;
-    await _db.collection('users').doc(currentUser!.id).update({
-      'email': email,
-      'isEmailVerified': true,
-    });
+    await _db.collection('users').doc(currentUser!.id).update({'email': email, 'isEmailVerified': true});
     await addPoints(50, 'Bonus Verifikasi Email');
   }
 
@@ -421,9 +506,7 @@ class AppDataController extends ChangeNotifier {
   Future<void> updateServiceStatus(ServiceOrder s, String newStatus) async {
     await _db.collection('services').doc(s.id).update({'status': newStatus});
     if (newStatus == 'Selesai' && s.customerPhone.isNotEmpty) {
-      await _db.collection('users').doc(s.customerPhone).set({
-        'points': FieldValue.increment(50),
-      }, SetOptions(merge: true));
+      await _db.collection('users').doc(s.customerPhone).set({'points': FieldValue.increment(50)}, SetOptions(merge: true));
       if (s.customerPhone == currentUser?.id) {
         currentUser!.points += 50;
         pointHistories.insert(0, PointHistory('Poin Servis ${s.invoiceNo}', 50, DateTime.now()));
