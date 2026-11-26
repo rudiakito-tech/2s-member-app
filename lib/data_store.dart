@@ -136,6 +136,7 @@ class AppDataController extends ChangeNotifier {
   bool _googleReady = false;
   String? pendingGoogleEmail;
   String? pendingGoogleName;
+  String? verifiedResetPhone;
 
   StreamSubscription<DocumentSnapshot>? _otpSub;
   StreamSubscription<QuerySnapshot>? _srvSub;
@@ -197,27 +198,64 @@ class AppDataController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // LOGIN 1: NO. WA + PASSWORD
-  Future<String?> loginWithPassword(String rawPhone, String password) async {
-    final phone = normalizePhone(rawPhone);
-    if (phone.length < 9) return 'Nomor WhatsApp tidak valid.';
+  // LOGIN 1: EMAIL / NO. WA + PASSWORD (MENDUKUNG INGAT SAYA)
+  Future<String?> loginWithPassword(String rawInput, String password, {bool rememberMe = true}) async {
+    final input = rawInput.trim();
+    if (input.contains('@')) {
+      return loginWithGmail(input, password, rememberMe: rememberMe);
+    }
+
+    final phone = normalizePhone(input);
+    if (phone.length < 9) return 'Nomor WhatsApp / Email tidak valid.';
     if (password.length < 6) return 'Password minimal 6 karakter.';
 
     final doc = await _db.collection('users').doc(phone).get();
-    if (!doc.exists) return 'Nomor WA belum terdaftar. Silakan Daftar terlebih dahulu.';
+    if (!doc.exists) return 'Nomor WA belum terdaftar. Silakan Daftar Sekarang.';
 
     final data = doc.data()!;
     final storedHash = (data['passwordHash'] ?? '').toString();
-    if (storedHash.isEmpty) return 'Akun lama belum punya password. Gunakan Reset WA.';
+    if (storedHash.isEmpty) return 'Akun belum punya password. Gunakan Lupa Password.';
     if (storedHash != _hashPassword(phone, password)) return 'Password salah!';
 
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('2s_logged_phone', phone);
+    if (rememberMe) {
+      await prefs.setString('2s_logged_phone', phone);
+    } else {
+      await prefs.remove('2s_logged_phone');
+    }
     await _applyLoggedInUser(phone, data);
     return null;
   }
 
-  // LOGIN 2: TOMBOL RESMI GOOGLE (GOOGLE SIGN-IN)
+  Future<String?> loginWithGmail(String rawEmail, String password, {bool rememberMe = true}) async {
+    final email = rawEmail.trim().toLowerCase();
+    if (!email.contains('@')) return 'Alamat email tidak valid.';
+    try {
+      final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(email: email, password: password);
+      if (cred.user == null) return 'Gagal login email.';
+      if (!cred.user!.emailVerified) {
+        await cred.user!.sendEmailVerification();
+        return 'Email belum diverifikasi. Link baru dikirim ke Inbox/Spam Anda.';
+      }
+      final q = await _db.collection('users').where('email', isEqualTo: email).limit(1).get();
+      if (q.docs.isEmpty) return 'Email belum tertaut ke nomor WA. Masuk pakai No. WA dulu.';
+      final userDoc = q.docs.first;
+      final prefs = await SharedPreferences.getInstance();
+      if (rememberMe) {
+        await prefs.setString('2s_logged_phone', userDoc.id);
+      } else {
+        await prefs.remove('2s_logged_phone');
+      }
+      await _applyLoggedInUser(userDoc.id, userDoc.data());
+      return null;
+    } on FirebaseAuthException catch (e) {
+      return 'Gagal login: ${e.message}';
+    } catch (e) {
+      return 'Error: $e';
+    }
+  }
+
+  // LOGIN 2: TOMBOL RESMI GOOGLE
   Future<GoogleAuthResult> signInWithGoogleButton() async {
     if (AppConfig.googleWebClientId.contains('ISI_WEB_CLIENT_ID')) {
       return GoogleAuthResult(error: 'googleWebClientId di app_config.dart belum diisi!');
@@ -262,10 +300,10 @@ class AppDataController extends ChangeNotifier {
 
   // REVERSE OTP WA DENGAN VALIDASI KETAT NOMOR HP
   Future<OtpStartResult> startReverseOtp({
-    required String mode,
+    required String mode, // 'register' atau 'reset'
     required String rawPhone,
     String name = '',
-    required String password,
+    String password = '',
     String refCode = '',
     required void Function(String wrongPhone) onMismatch,
     required void Function(String? error) onCompleted,
@@ -277,10 +315,10 @@ class AppDataController extends ChangeNotifier {
 
     final existing = await _db.collection('users').doc(expectedPhone).get();
     if (mode == 'register' && existing.exists && (existing.data()?['passwordHash'] ?? '').toString().isNotEmpty) {
-      return OtpStartResult(error: 'Nomor WA $expectedPhone sudah terdaftar! Silakan langsung Masuk.');
+      return OtpStartResult(error: 'Nomor WA $expectedPhone sudah terdaftar! Silakan langsung Login.');
     }
     if (mode == 'reset' && !existing.exists) {
-      return OtpStartResult(error: 'Nomor WA $expectedPhone belum terdaftar! Silakan Daftar baru.');
+      return OtpStartResult(error: 'Nomor WA $expectedPhone belum terdaftar! Silakan Daftar Akun.');
     }
 
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -343,11 +381,11 @@ class AppDataController extends ChangeNotifier {
   }) async {
     final userRef = _db.collection('users').doc(phone);
     final doc = await userRef.get();
-    final passHash = _hashPassword(phone, password);
 
     if (mode == 'register') {
+      final passHash = _hashPassword(phone, password);
       if (doc.exists && (doc.data()?['passwordHash'] ?? '').toString().isNotEmpty) {
-        return 'Nomor WA $phone sudah terdaftar! Silakan Masuk.';
+        return 'Nomor WA $phone sudah terdaftar! Silakan Login.';
       }
       final suffix = phone.length >= 4 ? phone.substring(phone.length - 4) : phone;
       int startPts = 150;
@@ -390,15 +428,39 @@ class AppDataController extends ChangeNotifier {
       }
       pendingGoogleEmail = null;
       pendingGoogleName = null;
+
+      final fresh = await userRef.get();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('2s_logged_phone', phone);
+      await _applyLoggedInUser(phone, fresh.data()!);
+      return null;
     } else {
+      // Mode reset: simpan nomor terverifikasi, lalu lanjut ke layar "Buat Password Baru"
       if (!doc.exists) return 'Nomor WA $phone belum terdaftar.';
-      await userRef.update({'passwordHash': passHash, 'isWaVerified': true});
+      verifiedResetPhone = phone;
+      return null;
+    }
+  }
+
+  Future<String?> saveNewPasswordAfterReset(String newPassword) async {
+    final phone = verifiedResetPhone;
+    if (phone == null || phone.isEmpty) {
+      return 'Sesi verifikasi habis. Ulangi proses Lupa Password.';
+    }
+    final doc = await _db.collection('users').doc(phone).get();
+    if (!doc.exists) return 'Akun tidak ditemukan.';
+
+    final newHash = _hashPassword(phone, newPassword);
+    final oldHash = (doc.data()?['passwordHash'] ?? '').toString();
+    if (oldHash.isNotEmpty && newHash == oldHash) {
+      return 'Password baru tidak boleh sama dengan password lama.';
     }
 
-    final fresh = await userRef.get();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('2s_logged_phone', phone);
-    await _applyLoggedInUser(phone, fresh.data()!);
+    await _db.collection('users').doc(phone).update({
+      'passwordHash': newHash,
+      'isWaVerified': true,
+    });
+    verifiedResetPhone = null;
     return null;
   }
 
