@@ -103,6 +103,13 @@ class PointHistory {
   PointHistory(this.title, this.amount, this.date);
 }
 
+class OtpStartResult {
+  final String? code;
+  final String? expectedPhone;
+  final String? error;
+  OtpStartResult({this.code, this.expectedPhone, this.error});
+}
+
 class AppDataController extends ChangeNotifier {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   MemberUser? currentUser;
@@ -170,24 +177,19 @@ class AppDataController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // LOGIN TANPA OTP (No. WA + Password)
+  // LOGIN 1: NO. WA + PASSWORD (TANPA OTP)
   Future<String?> loginWithPassword(String rawPhone, String password) async {
     final phone = normalizePhone(rawPhone);
     if (phone.length < 9) return 'Nomor WhatsApp tidak valid.';
     if (password.length < 6) return 'Password minimal 6 karakter.';
 
     final doc = await _db.collection('users').doc(phone).get();
-    if (!doc.exists) {
-      return 'Nomor WA belum terdaftar. Silakan pindah ke tab Daftar.';
-    }
+    if (!doc.exists) return 'Nomor WA belum terdaftar. Silakan Daftar terlebih dahulu.';
+
     final data = doc.data()!;
     final storedHash = (data['passwordHash'] ?? '').toString();
-    if (storedHash.isEmpty) {
-      return 'Akun lama belum punya password. Gunakan tab Reset / Verifikasi WA.';
-    }
-    if (storedHash != _hashPassword(phone, password)) {
-      return 'Password salah! Periksa kembali atau gunakan Reset WA.';
-    }
+    if (storedHash.isEmpty) return 'Akun lama belum punya password. Gunakan Reset WA.';
+    if (storedHash != _hashPassword(phone, password)) return 'Password salah!';
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('2s_logged_phone', phone);
@@ -195,14 +197,62 @@ class AppDataController extends ChangeNotifier {
     return null;
   }
 
-  // REVERSE OTP WA (Hanya untuk Daftar Baru atau Reset/Verifikasi WA)
-  Future<String> startReverseOtp({
+  // LOGIN 2: GMAIL / EMAIL + PASSWORD (FIREBASE AUTH)
+  Future<String?> loginWithGmail(String rawEmail, String password) async {
+    final email = rawEmail.trim().toLowerCase();
+    if (!email.contains('@')) return 'Alamat Gmail/Email tidak valid.';
+    if (password.length < 6) return 'Password minimal 6 karakter.';
+
+    try {
+      final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(email: email, password: password);
+      if (cred.user == null) return 'Gagal login Gmail.';
+      if (!cred.user!.emailVerified) {
+        await cred.user!.sendEmailVerification();
+        return 'Gmail belum diverifikasi. Link baru sudah dikirim ke Inbox/Spam Anda!';
+      }
+
+      final q = await _db.collection('users').where('email', isEqualTo: email).limit(1).get();
+      if (q.docs.isEmpty) {
+        return 'Gmail ini belum tertaut ke akun 2S Member. Masuk pakai No. WA lalu verifikasi email di Profil.';
+      }
+
+      final userDoc = q.docs.first;
+      final phone = userDoc.id;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('2s_logged_phone', phone);
+      await _applyLoggedInUser(phone, userDoc.data());
+      return null;
+    } on FirebaseAuthException catch (e) {
+      return 'Gagal login Gmail: ${e.message}';
+    } catch (e) {
+      return 'Error: $e';
+    }
+  }
+
+  // REVERSE OTP WA DENGAN VALIDASI KETAT NOMOR HP
+  Future<OtpStartResult> startReverseOtp({
     required String mode, // 'register' atau 'reset'
+    required String rawPhone,
     String name = '',
     required String password,
     String refCode = '',
+    required void Function(String wrongPhone) onMismatch,
     required void Function(String? error) onCompleted,
   }) async {
+    final expectedPhone = normalizePhone(rawPhone);
+    if (expectedPhone.length < 9) {
+      return OtpStartResult(error: 'Nomor WhatsApp wajib diisi dengan benar (contoh: 0812...).');
+    }
+
+    // Cek database sebelum buka WA agar hemat waktu
+    final existing = await _db.collection('users').doc(expectedPhone).get();
+    if (mode == 'register' && existing.exists && (existing.data()?['passwordHash'] ?? '').toString().isNotEmpty) {
+      return OtpStartResult(error: 'Nomor WA $expectedPhone sudah terdaftar! Silakan langsung Masuk.');
+    }
+    if (mode == 'reset' && !existing.exists) {
+      return OtpStartResult(error: 'Nomor WA $expectedPhone belum terdaftar! Silakan Daftar baru.');
+    }
+
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     final rnd = Random();
     final code = '2S-${List.generate(6, (_) => chars[rnd.nextInt(chars.length)]).join()}';
@@ -210,21 +260,35 @@ class AppDataController extends ChangeNotifier {
     final sessionDoc = await _db.collection('otp_sessions').add({
       'code': code,
       'mode': mode,
+      'expectedPhone': expectedPhone,
       'status': 'pending',
       'createdAt': FieldValue.serverTimestamp(),
     });
 
+    Timestamp? lastMismatchTs;
     await _otpSub?.cancel();
     _otpSub = sessionDoc.snapshots().listen((snap) async {
       final d = snap.data();
-      if (d != null && d['status'] == 'verified') {
-        await _otpSub?.cancel();
+      if (d == null) return;
+
+      // Jika nomor WA pengirim berbeda -> beri tahu UI & TETAP MENUNGGU
+      if (d['status'] == 'pending' && d['mismatchSender'] != null) {
+        final ts = d['mismatchAt'] as Timestamp?;
+        if (ts != null && ts != lastMismatchTs) {
+          lastMismatchTs = ts;
+          onMismatch(d['mismatchSender'].toString());
+        }
+        return;
+      }
+
+      if (d['status'] == 'verified') {
         final phone = normalizePhone(d['phone'] ?? '');
-        final waName = (d['waName'] ?? '').toString();
-        if (phone.isEmpty) {
-          onCompleted('Nomor WA gagal terbaca.');
+        if (phone != expectedPhone) {
+          onMismatch(phone);
           return;
         }
+        await _otpSub?.cancel();
+        final waName = (d['waName'] ?? '').toString();
         final err = await _finishWaVerification(
           mode: mode,
           phone: phone,
@@ -236,7 +300,11 @@ class AppDataController extends ChangeNotifier {
       }
     });
 
-    return code;
+    return OtpStartResult(code: code, expectedPhone: expectedPhone);
+  }
+
+  Future<void> cancelOtpWait() async {
+    await _otpSub?.cancel();
   }
 
   Future<String?> _finishWaVerification({
@@ -252,7 +320,7 @@ class AppDataController extends ChangeNotifier {
 
     if (mode == 'register') {
       if (doc.exists && (doc.data()?['passwordHash'] ?? '').toString().isNotEmpty) {
-        return 'Nomor WA $phone sudah terdaftar! Silakan Masuk pakai password.';
+        return 'Nomor WA $phone sudah terdaftar! Silakan Masuk.';
       }
       final suffix = phone.length >= 4 ? phone.substring(phone.length - 4) : phone;
       int startPts = 150;
@@ -290,10 +358,7 @@ class AppDataController extends ChangeNotifier {
         });
       }
     } else {
-      // Mode reset password / verifikasi WA ulang
-      if (!doc.exists) {
-        return 'Nomor WA $phone belum terdaftar. Silakan Daftar baru.';
-      }
+      if (!doc.exists) return 'Nomor WA $phone belum terdaftar.';
       await userRef.update({'passwordHash': passHash, 'isWaVerified': true});
     }
 
@@ -379,23 +444,24 @@ class AppDataController extends ChangeNotifier {
   }
 
   Future<String> sendRealEmailVerification(String email, String password) async {
+    final cleanEmail = email.trim().toLowerCase();
     try {
       final auth = FirebaseAuth.instance;
       UserCredential cred;
       try {
-        cred = await auth.createUserWithEmailAndPassword(email: email.trim(), password: password);
+        cred = await auth.createUserWithEmailAndPassword(email: cleanEmail, password: password);
       } on FirebaseAuthException catch (e) {
         if (e.code == 'email-already-in-use') {
-          cred = await auth.signInWithEmailAndPassword(email: email.trim(), password: password);
+          cred = await auth.signInWithEmailAndPassword(email: cleanEmail, password: password);
         } else {
           return 'Gagal: ${e.message}';
         }
       }
       if (cred.user != null && !cred.user!.emailVerified) {
         await cred.user!.sendEmailVerification();
-        return 'Link verifikasi dikirim ke $email! Cek Inbox/Spam.';
+        return 'Link verifikasi dikirim ke $cleanEmail! Cek Inbox/Spam.';
       } else if (cred.user?.emailVerified == true) {
-        await markEmailVerifiedInDb(email.trim());
+        await markEmailVerifiedInDb(cleanEmail);
         return 'Email sudah terverifikasi!';
       }
       return 'Silakan cek email Anda.';
@@ -410,7 +476,7 @@ class AppDataController extends ChangeNotifier {
     await user.reload();
     final refreshed = FirebaseAuth.instance.currentUser;
     if (refreshed != null && refreshed.emailVerified) {
-      await markEmailVerifiedInDb(refreshed.email ?? '');
+      await markEmailVerifiedInDb((refreshed.email ?? '').toLowerCase());
       return true;
     }
     return false;
@@ -418,10 +484,10 @@ class AppDataController extends ChangeNotifier {
 
   Future<void> markEmailVerifiedInDb(String email) async {
     if (currentUser == null || currentUser!.isEmailVerified) return;
-    currentUser!.email = email;
+    currentUser!.email = email.toLowerCase();
     currentUser!.isEmailVerified = true;
     missions[0].isCompleted = true;
-    await _db.collection('users').doc(currentUser!.id).update({'email': email, 'isEmailVerified': true});
+    await _db.collection('users').doc(currentUser!.id).update({'email': email.toLowerCase(), 'isEmailVerified': true});
     await addPoints(50, 'Bonus Verifikasi Email');
   }
 
