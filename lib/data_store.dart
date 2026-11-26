@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'app_config.dart';
 
@@ -110,12 +111,31 @@ class OtpStartResult {
   OtpStartResult({this.code, this.expectedPhone, this.error});
 }
 
+class GoogleAuthResult {
+  final bool loggedIn;
+  final bool needsWaRegistration;
+  final String? email;
+  final String? name;
+  final String? error;
+  GoogleAuthResult({
+    this.loggedIn = false,
+    this.needsWaRegistration = false,
+    this.email,
+    this.name,
+    this.error,
+  });
+}
+
 class AppDataController extends ChangeNotifier {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   MemberUser? currentUser;
   bool isInitialized = false;
   bool isAdminMode = false;
   int extraStoreDiscount = 0;
+
+  bool _googleReady = false;
+  String? pendingGoogleEmail;
+  String? pendingGoogleName;
 
   StreamSubscription<DocumentSnapshot>? _otpSub;
   StreamSubscription<QuerySnapshot>? _srvSub;
@@ -177,7 +197,7 @@ class AppDataController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // LOGIN 1: NO. WA + PASSWORD (TANPA OTP)
+  // LOGIN 1: NO. WA + PASSWORD
   Future<String?> loginWithPassword(String rawPhone, String password) async {
     final phone = normalizePhone(rawPhone);
     if (phone.length < 9) return 'Nomor WhatsApp tidak valid.';
@@ -197,41 +217,52 @@ class AppDataController extends ChangeNotifier {
     return null;
   }
 
-  // LOGIN 2: GMAIL / EMAIL + PASSWORD (FIREBASE AUTH)
-  Future<String?> loginWithGmail(String rawEmail, String password) async {
-    final email = rawEmail.trim().toLowerCase();
-    if (!email.contains('@')) return 'Alamat Gmail/Email tidak valid.';
-    if (password.length < 6) return 'Password minimal 6 karakter.';
-
+  // LOGIN 2: TOMBOL RESMI GOOGLE (GOOGLE SIGN-IN)
+  Future<GoogleAuthResult> signInWithGoogleButton() async {
+    if (AppConfig.googleWebClientId.contains('ISI_WEB_CLIENT_ID')) {
+      return GoogleAuthResult(error: 'googleWebClientId di app_config.dart belum diisi!');
+    }
     try {
-      final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(email: email, password: password);
-      if (cred.user == null) return 'Gagal login Gmail.';
-      if (!cred.user!.emailVerified) {
-        await cred.user!.sendEmailVerification();
-        return 'Gmail belum diverifikasi. Link baru sudah dikirim ke Inbox/Spam Anda!';
+      if (!_googleReady) {
+        await GoogleSignIn.instance.initialize(serverClientId: AppConfig.googleWebClientId);
+        _googleReady = true;
+      }
+      final GoogleSignInAccount? account = await GoogleSignIn.instance.authenticate();
+      if (account == null) return GoogleAuthResult(error: 'Login Google dibatalkan.');
+
+      final idToken = account.authentication.idToken;
+      if (idToken == null) {
+        return GoogleAuthResult(error: 'Token Google kosong. Pastikan Web Client ID & SHA-1 di Firebase sudah benar.');
       }
 
+      await FirebaseAuth.instance.signInWithCredential(GoogleAuthProvider.credential(idToken: idToken));
+      final email = account.email.trim().toLowerCase();
       final q = await _db.collection('users').where('email', isEqualTo: email).limit(1).get();
-      if (q.docs.isEmpty) {
-        return 'Gmail ini belum tertaut ke akun 2S Member. Masuk pakai No. WA lalu verifikasi email di Profil.';
+
+      if (q.docs.isNotEmpty) {
+        final userDoc = q.docs.first;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('2s_logged_phone', userDoc.id);
+        await _applyLoggedInUser(userDoc.id, userDoc.data());
+        return GoogleAuthResult(loggedIn: true, email: email);
       }
 
-      final userDoc = q.docs.first;
-      final phone = userDoc.id;
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('2s_logged_phone', phone);
-      await _applyLoggedInUser(phone, userDoc.data());
-      return null;
-    } on FirebaseAuthException catch (e) {
-      return 'Gagal login Gmail: ${e.message}';
+      pendingGoogleEmail = email;
+      pendingGoogleName = account.displayName ?? '';
+      return GoogleAuthResult(needsWaRegistration: true, email: email, name: pendingGoogleName);
+    } on GoogleSignInException catch (e) {
+      if (e.code == GoogleSignInExceptionCode.canceled) {
+        return GoogleAuthResult(error: 'Login Google dibatalkan.');
+      }
+      return GoogleAuthResult(error: 'Google Sign-In gagal (${e.code.name}): ${e.description ?? "Periksa SHA-1 di Firebase"}');
     } catch (e) {
-      return 'Error: $e';
+      return GoogleAuthResult(error: 'Error Google Sign-In: $e');
     }
   }
 
   // REVERSE OTP WA DENGAN VALIDASI KETAT NOMOR HP
   Future<OtpStartResult> startReverseOtp({
-    required String mode, // 'register' atau 'reset'
+    required String mode,
     required String rawPhone,
     String name = '',
     required String password,
@@ -244,7 +275,6 @@ class AppDataController extends ChangeNotifier {
       return OtpStartResult(error: 'Nomor WhatsApp wajib diisi dengan benar (contoh: 0812...).');
     }
 
-    // Cek database sebelum buka WA agar hemat waktu
     final existing = await _db.collection('users').doc(expectedPhone).get();
     if (mode == 'register' && existing.exists && (existing.data()?['passwordHash'] ?? '').toString().isNotEmpty) {
       return OtpStartResult(error: 'Nomor WA $expectedPhone sudah terdaftar! Silakan langsung Masuk.');
@@ -271,7 +301,6 @@ class AppDataController extends ChangeNotifier {
       final d = snap.data();
       if (d == null) return;
 
-      // Jika nomor WA pengirim berbeda -> beri tahu UI & TETAP MENUNGGU
       if (d['status'] == 'pending' && d['mismatchSender'] != null) {
         final ts = d['mismatchAt'] as Timestamp?;
         if (ts != null && ts != lastMismatchTs) {
@@ -303,9 +332,7 @@ class AppDataController extends ChangeNotifier {
     return OtpStartResult(code: code, expectedPhone: expectedPhone);
   }
 
-  Future<void> cancelOtpWait() async {
-    await _otpSub?.cancel();
-  }
+  Future<void> cancelOtpWait() async => await _otpSub?.cancel();
 
   Future<String?> _finishWaVerification({
     required String mode,
@@ -327,7 +354,7 @@ class AppDataController extends ChangeNotifier {
       if (refCode.isNotEmpty) {
         final refSnap = await _db.collection('users').where('referralCode', isEqualTo: refCode).limit(1).get();
         if (refSnap.docs.isNotEmpty) {
-          startPts = 200;
+          startPts += 50;
           await refSnap.docs.first.reference.update({'points': FieldValue.increment(100)});
           await refSnap.docs.first.reference.collection('point_histories').add({
             'title': 'Komisi Affiliate ($name)',
@@ -336,13 +363,16 @@ class AppDataController extends ChangeNotifier {
           });
         }
       }
+      final hasGoogle = pendingGoogleEmail != null && pendingGoogleEmail!.isNotEmpty;
+      if (hasGoogle) startPts += 50;
+
       await userRef.set({
         'name': name,
         'phone': phone,
         'passwordHash': passHash,
         'isWaVerified': true,
-        'email': doc.data()?['email'] ?? '',
-        'isEmailVerified': doc.data()?['isEmailVerified'] ?? false,
+        'email': hasGoogle ? pendingGoogleEmail : (doc.data()?['email'] ?? ''),
+        'isEmailVerified': hasGoogle ? true : (doc.data()?['isEmailVerified'] ?? false),
         'points': doc.exists ? (doc.data()?['points'] ?? startPts) : startPts,
         'referralCode': doc.data()?['referralCode'] ?? '2S-$suffix',
         'checkInStreak': doc.data()?['checkInStreak'] ?? 0,
@@ -350,13 +380,16 @@ class AppDataController extends ChangeNotifier {
         'freeSpinUsedToday': doc.data()?['freeSpinUsedToday'] ?? false,
         'createdAt': doc.data()?['createdAt'] ?? FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+
       if (!doc.exists) {
         await userRef.collection('point_histories').add({
-          'title': startPts > 150 ? 'Bonus Daftar + Referral' : 'Bonus Member Baru 2S',
+          'title': hasGoogle ? 'Bonus Daftar + Google Terverifikasi' : 'Bonus Member Baru 2S',
           'amount': startPts,
           'date': FieldValue.serverTimestamp(),
         });
       }
+      pendingGoogleEmail = null;
+      pendingGoogleName = null;
     } else {
       if (!doc.exists) return 'Nomor WA $phone belum terdaftar.';
       await userRef.update({'passwordHash': passHash, 'isWaVerified': true});
@@ -393,6 +426,10 @@ class AppDataController extends ChangeNotifier {
   Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('2s_logged_phone');
+    try {
+      await FirebaseAuth.instance.signOut();
+      if (_googleReady) await GoogleSignIn.instance.signOut();
+    } catch (_) {}
     await _srvSub?.cancel();
     currentUser = null;
     isAdminMode = false;
