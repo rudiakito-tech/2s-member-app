@@ -8,10 +8,13 @@ class AppConfig {
   // Nomor WA toko yang terhubung ke Fonnte (format 628...)
   static const String businessWaNumber = '62895414593299';
 
-  // Daftar nomor WA Admin/Kasir (hanya nomor di daftar ini yang melihat menu Kasir)
+  // Daftar nomor WA Admin/Kasir
   static const List<String> adminWaNumbers = [
     '6287878078074',
   ];
+
+  // WAJIB ISI dari Firebase Console -> Authentication -> Google -> Web SDK configuration -> Web client ID
+  static const String googleWebClientId = '514037486909-4k706d8cu25l6a3tg1cgl25oo3dl7p4j.apps.googleusercontent.com';
 
   static const String cloudinaryCloudName = 'ISI_CLOUD_NAME_ANDA';
   static const String cloudinaryUploadPreset = 'ISI_UPLOAD_PRESET_ANDA';
