@@ -17,7 +17,6 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
   late int _modeIndex;
   int _prevModeIndex = 0;
   bool _darkTheme = false;
-  bool _loginWithGmail = false;
 
   late final AnimationController _enterCtrl;
   late final Animation<double> _fadeAnim;
@@ -26,7 +25,6 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
   final ValueNotifier<String?> _mismatchNotifier = ValueNotifier<String?>(null);
 
   final _loginPhoneC = TextEditingController();
-  final _loginGmailC = TextEditingController();
   final _loginPassC = TextEditingController();
 
   final _regPhoneC = TextEditingController();
@@ -46,6 +44,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
   bool _hideResPass2 = true;
 
   bool _loginBusy = false;
+  bool _googleBusy = false;
   bool _waWaiting = false;
   bool _sheetOpen = false;
   String? _waCode;
@@ -74,7 +73,6 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
     _pulseCtrl.dispose();
     _mismatchNotifier.dispose();
     _loginPhoneC.dispose();
-    _loginGmailC.dispose();
     _loginPassC.dispose();
     _regPhoneC.dispose();
     _regNameC.dispose();
@@ -101,11 +99,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
       _loginBusy = true;
       _errorMsg = null;
     });
-
-    final err = _loginWithGmail
-        ? await widget.ctrl.loginWithGmail(_loginGmailC.text, _loginPassC.text)
-        : await widget.ctrl.loginWithPassword(_loginPhoneC.text, _loginPassC.text);
-
+    final err = await widget.ctrl.loginWithPassword(_loginPhoneC.text, _loginPassC.text);
     if (!mounted) return;
     setState(() => _loginBusy = false);
     if (err != null) {
@@ -114,6 +108,37 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
       Navigator.of(context).pop(true);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Berhasil masuk ke 2S Member!')),
+      );
+    }
+  }
+
+  Future<void> _doGoogleLogin() async {
+    setState(() {
+      _googleBusy = true;
+      _errorMsg = null;
+    });
+    final res = await widget.ctrl.signInWithGoogleButton();
+    if (!mounted) return;
+    setState(() => _googleBusy = false);
+
+    if (res.error != null) {
+      setState(() => _errorMsg = res.error);
+      return;
+    }
+    if (res.loggedIn) {
+      Navigator.of(context).pop(true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Berhasil masuk dengan Google (${res.email})!')),
+      );
+      return;
+    }
+    if (res.needsWaRegistration) {
+      if (_regNameC.text.isEmpty && (res.name ?? '').isNotEmpty) {
+        _regNameC.text = res.name!;
+      }
+      _switchMode(1);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Google (${res.email}) terverifikasi! Lengkapi No. WA untuk daftar.')),
       );
     }
   }
@@ -221,7 +246,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
             Text(title, style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold, color: txtColor)),
             const SizedBox(height: 6),
             Text(
-              'Kirim kode di bawah KHUSUS dari nomor WA $targetPhone. Jika dikirim dari nomor lain, sistem tidak akan memproses.',
+              'Kirim kode ini KHUSUS dari nomor WA $targetPhone. Jika dikirim dari nomor lain, sistem tidak akan memproses.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 13, color: _darkTheme ? Colors.grey[400] : Colors.grey[700]),
             ),
@@ -310,7 +335,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
 
     final titles = ['Selamat Datang!', 'Daftar 2S Member', 'Reset Password'];
     final subtitles = [
-      'Masuk pakai No. WhatsApp atau Gmail terdaftar Anda.',
+      'Masuk pakai No. WhatsApp atau langsung dengan Google.',
       'Masukkan No. WA Anda & verifikasi otomatis tanpa SMS.',
       'Masukkan No. WA terdaftar untuk membuat password baru.',
     ];
@@ -435,69 +460,9 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Pilihan Metode Masuk: No. WA atau Gmail
-        Container(
-          padding: const EdgeInsets.all(4),
-          decoration: BoxDecoration(
-            color: _darkTheme ? const Color(0xFF131B2B) : const Color(0xFFF1F5FB),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => setState(() {
-                    _loginWithGmail = false;
-                    _errorMsg = null;
-                  }),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    decoration: BoxDecoration(
-                      color: !_loginWithGmail ? primary : Colors.transparent,
-                      borderRadius: BorderRadius.circular(11),
-                    ),
-                    child: Text(
-                      'No. WhatsApp',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: !_loginWithGmail ? onPrimary : mutedCol),
-                    ),
-                  ),
-                ),
-              ),
-              Expanded(
-                child: GestureDetector(
-                  onTap: () => setState(() {
-                    _loginWithGmail = true;
-                    _errorMsg = null;
-                  }),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    decoration: BoxDecoration(
-                      color: _loginWithGmail ? primary : Colors.transparent,
-                      borderRadius: BorderRadius.circular(11),
-                    ),
-                    child: Text(
-                      'Gmail',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _loginWithGmail ? onPrimary : mutedCol),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 14),
-        AnimatedSwitcher(
-          duration: const Duration(milliseconds: 220),
-          child: _loginWithGmail
-              ? _field(_loginGmailC, 'Alamat Gmail Terverifikasi', Icons.email_outlined, textCol, mutedCol, key: const ValueKey('gm'), type: TextInputType.emailAddress)
-              : _field(_loginPhoneC, 'Nomor WhatsApp (08... / 628...)', Icons.phone_android, textCol, mutedCol, key: const ValueKey('wa'), type: TextInputType.phone),
-        ),
+        _field(_loginPhoneC, 'Nomor WhatsApp (08... / 628...)', Icons.phone_android, textCol, mutedCol, type: TextInputType.phone),
         const SizedBox(height: 12),
-        _passField(_loginPassC, _loginWithGmail ? 'Password Email' : 'Password Akun', _hideLoginPass, () => setState(() => _hideLoginPass = !_hideLoginPass), textCol, mutedCol),
+        _passField(_loginPassC, 'Password Akun', _hideLoginPass, () => setState(() => _hideLoginPass = !_hideLoginPass), textCol, mutedCol),
         Align(
           alignment: Alignment.centerRight,
           child: TextButton(
@@ -509,26 +474,88 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
           onTap: _loginBusy ? null : _doLogin,
           color: primary,
           textColor: onPrimary,
-          label: _loginBusy ? 'Memeriksa...' : (_loginWithGmail ? 'Masuk dengan Gmail' : 'Masuk Sekarang'),
-          icon: _loginWithGmail ? Icons.mail : Icons.login,
+          label: _loginBusy ? 'Memeriksa...' : 'Masuk Sekarang',
+          icon: Icons.login,
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Row(
+            children: [
+              Expanded(child: Divider(color: mutedCol.withValues(alpha: 0.3))),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: Text('atau', style: TextStyle(color: mutedCol, fontSize: 12)),
+              ),
+              Expanded(child: Divider(color: mutedCol.withValues(alpha: 0.3))),
+            ],
+          ),
+        ),
+        // TOMBOL RESMI GOOGLE
+        SizedBox(
+          height: 50,
+          child: OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              backgroundColor: _darkTheme ? const Color(0xFF131B2B) : Colors.white,
+              foregroundColor: textCol,
+              side: BorderSide(color: _darkTheme ? Colors.white24 : Colors.grey.shade300, width: 1.3),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+            onPressed: _googleBusy ? null : _doGoogleLogin,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (_googleBusy)
+                  const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                else
+                  Container(
+                    width: 24,
+                    height: 24,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+                    child: const Text('G', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: Color(0xFFDB4437))),
+                  ),
+                const SizedBox(width: 10),
+                Text(
+                  _googleBusy ? 'Menghubungkan Google...' : 'Masuk dengan Google',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: textCol),
+                ),
+              ],
+            ),
+          ),
         ),
         const SizedBox(height: 10),
-        SizedBox(
-          height: 46,
-          child: OutlinedButton(
-            style: OutlinedButton.styleFrom(foregroundColor: textCol, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Lanjut sebagai Tamu'),
-          ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text('Lanjut sebagai Tamu', style: TextStyle(color: mutedCol)),
         ),
       ],
     );
   }
 
   Widget _buildRegisterCard(Color textCol, Color mutedCol) {
+    final gEmail = widget.ctrl.pendingGoogleEmail;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (gEmail != null && gEmail.isNotEmpty)
+          Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.green.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.green.withValues(alpha: 0.4)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.check_circle, color: Colors.green, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('Google Terhubung: $gEmail (+50 Poin)', style: const TextStyle(color: Colors.green, fontSize: 12, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
+          ),
         _field(_regPhoneC, 'Nomor WhatsApp (08... / 628...)', Icons.phone_android, textCol, mutedCol, type: TextInputType.phone),
         const SizedBox(height: 12),
         _field(_regNameC, 'Nama Lengkap', Icons.person, textCol, mutedCol),
