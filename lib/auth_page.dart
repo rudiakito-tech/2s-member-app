@@ -17,18 +17,25 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
   late int _modeIndex;
   int _prevModeIndex = 0;
   bool _darkTheme = false;
+  bool _loginWithGmail = false;
 
   late final AnimationController _enterCtrl;
   late final Animation<double> _fadeAnim;
   late final Animation<Offset> _slideAnim;
   late final AnimationController _pulseCtrl;
+  final ValueNotifier<String?> _mismatchNotifier = ValueNotifier<String?>(null);
 
   final _loginPhoneC = TextEditingController();
+  final _loginGmailC = TextEditingController();
   final _loginPassC = TextEditingController();
+
+  final _regPhoneC = TextEditingController();
   final _regNameC = TextEditingController();
   final _regPassC = TextEditingController();
   final _regPass2C = TextEditingController();
   final _regRefC = TextEditingController();
+
+  final _resetPhoneC = TextEditingController();
   final _resetPassC = TextEditingController();
   final _resetPass2C = TextEditingController();
 
@@ -42,6 +49,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
   bool _waWaiting = false;
   bool _sheetOpen = false;
   String? _waCode;
+  String? _expectedPhone;
   String? _errorMsg;
 
   @override
@@ -64,12 +72,16 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
   void dispose() {
     _enterCtrl.dispose();
     _pulseCtrl.dispose();
+    _mismatchNotifier.dispose();
     _loginPhoneC.dispose();
+    _loginGmailC.dispose();
     _loginPassC.dispose();
+    _regPhoneC.dispose();
     _regNameC.dispose();
     _regPassC.dispose();
     _regPass2C.dispose();
     _regRefC.dispose();
+    _resetPhoneC.dispose();
     _resetPassC.dispose();
     _resetPass2C.dispose();
     super.dispose();
@@ -89,7 +101,11 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
       _loginBusy = true;
       _errorMsg = null;
     });
-    final err = await widget.ctrl.loginWithPassword(_loginPhoneC.text, _loginPassC.text);
+
+    final err = _loginWithGmail
+        ? await widget.ctrl.loginWithGmail(_loginGmailC.text, _loginPassC.text)
+        : await widget.ctrl.loginWithPassword(_loginPhoneC.text, _loginPassC.text);
+
     if (!mounted) return;
     setState(() => _loginBusy = false);
     if (err != null) {
@@ -103,9 +119,14 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
   }
 
   Future<void> _startWaOtp({required String mode}) async {
+    final phoneInput = mode == 'register' ? _regPhoneC.text : _resetPhoneC.text;
     final pass = mode == 'register' ? _regPassC.text : _resetPassC.text;
     final pass2 = mode == 'register' ? _regPass2C.text : _resetPass2C.text;
 
+    if (phoneInput.trim().length < 9) {
+      setState(() => _errorMsg = 'Nomor WhatsApp wajib diisi dengan benar (contoh: 0812...).');
+      return;
+    }
     if (mode == 'register' && _regNameC.text.trim().isEmpty) {
       setState(() => _errorMsg = 'Nama lengkap wajib diisi.');
       return;
@@ -119,16 +140,23 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
       return;
     }
 
+    _mismatchNotifier.value = null;
     setState(() {
       _errorMsg = null;
       _waWaiting = true;
     });
 
-    final code = await widget.ctrl.startReverseOtp(
+    final res = await widget.ctrl.startReverseOtp(
       mode: mode,
+      rawPhone: phoneInput,
       name: _regNameC.text,
       password: pass,
       refCode: _regRefC.text,
+      onMismatch: (wrongPhone) {
+        if (!mounted) return;
+        _mismatchNotifier.value =
+            '⚠️ Pesan masuk dari $wrongPhone berbeda dengan nomor ${_expectedPhone ?? phoneInput}! Tetap menunggu pesan dari nomor terdaftar.';
+      },
       onCompleted: (err) {
         if (!mounted) return;
         setState(() => _waWaiting = false);
@@ -148,8 +176,23 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
     );
 
     if (!mounted) return;
-    setState(() => _waCode = code);
-    _showReverseOtpSheet(mode == 'register' ? 'Verifikasi Daftar Akun' : 'Verifikasi Reset Password', code);
+    if (res.error != null) {
+      setState(() {
+        _waWaiting = false;
+        _errorMsg = res.error;
+      });
+      return;
+    }
+
+    setState(() {
+      _waCode = res.code;
+      _expectedPhone = res.expectedPhone;
+    });
+    _showReverseOtpSheet(
+      mode == 'register' ? 'Verifikasi Daftar Akun' : 'Verifikasi Reset Password',
+      res.code!,
+      res.expectedPhone!,
+    );
   }
 
   Future<void> _launchWa(String code) async {
@@ -158,7 +201,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
     await launchUrl(url, mode: LaunchMode.externalApplication);
   }
 
-  void _showReverseOtpSheet(String title, String code) {
+  void _showReverseOtpSheet(String title, String code, String targetPhone) {
     _sheetOpen = true;
     final cardBg = _darkTheme ? const Color(0xFF1B2436) : Colors.white;
     final txtColor = _darkTheme ? Colors.white : const Color(0xFF141B29);
@@ -167,24 +210,22 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
       context: context,
       backgroundColor: cardBg,
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(28))),
       builder: (ctx) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 14, 24, 28),
+        padding: const EdgeInsets.fromLTRB(24, 14, 24, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(width: 44, height: 4, decoration: BoxDecoration(color: Colors.grey.withValues(alpha: 0.4), borderRadius: BorderRadius.circular(4))),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             Text(title, style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold, color: txtColor)),
             const SizedBox(height: 6),
             Text(
-              'Kirim kode ini via WhatsApp, lalu kembali ke aplikasi. Akun akan masuk otomatis!',
+              'Kirim kode di bawah KHUSUS dari nomor WA $targetPhone. Jika dikirim dari nomor lain, sistem tidak akan memproses.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 13, color: _darkTheme ? Colors.grey[400] : Colors.grey[700]),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             ScaleTransition(
               scale: Tween(begin: 0.97, end: 1.03).animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut)),
               child: Container(
@@ -202,7 +243,23 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                 ),
               ),
             ),
-            const SizedBox(height: 16),
+            ValueListenableBuilder<String?>(
+              valueListenable: _mismatchNotifier,
+              builder: (_, warn, __) {
+                if (warn == null) return const SizedBox(height: 12);
+                return Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.symmetric(vertical: 12),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.red.withValues(alpha: 0.5)),
+                  ),
+                  child: Text(warn, textAlign: TextAlign.center, style: const TextStyle(color: Colors.red, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                );
+              },
+            ),
             SizedBox(
               width: double.infinity,
               height: 48,
@@ -213,14 +270,27 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                 label: const Text('Buka WhatsApp Sekarang', style: TextStyle(fontWeight: FontWeight.bold)),
               ),
             ),
-            const SizedBox(height: 8),
-            TextButton.icon(
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: 'LOGIN $code'));
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Teks LOGIN disalin!')));
-              },
-              icon: const Icon(Icons.copy, size: 18),
-              label: const Text('Salin Teks Manual'),
+            const SizedBox(height: 6),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                TextButton.icon(
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: 'LOGIN $code'));
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Teks LOGIN disalin!')));
+                  },
+                  icon: const Icon(Icons.copy, size: 17),
+                  label: const Text('Salin Teks'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    widget.ctrl.cancelOtpWait();
+                    setState(() => _waWaiting = false);
+                    Navigator.of(ctx).pop();
+                  },
+                  child: const Text('Batalkan', style: TextStyle(color: Colors.red)),
+                ),
+              ],
             ),
           ],
         ),
@@ -240,9 +310,9 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
 
     final titles = ['Selamat Datang!', 'Daftar 2S Member', 'Reset Password'];
     final subtitles = [
-      'Masuk cepat tanpa OTP untuk cek servis, nota & poin.',
-      'Verifikasi WA otomatis & dapatkan bonus +150 Poin.',
-      'Buat password baru lalu verifikasi lewat WA terdaftar.',
+      'Masuk pakai No. WhatsApp atau Gmail terdaftar Anda.',
+      'Masukkan No. WA Anda & verifikasi otomatis tanpa SMS.',
+      'Masukkan No. WA terdaftar untuk membuat password baru.',
     ];
     final badges = ['2S SERVICE HP', '+150 POIN BARU', 'KEAMANAN AKUN'];
 
@@ -250,11 +320,10 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
       backgroundColor: bg,
       body: Column(
         children: [
-          // HERO HEADER MELENGKUNG (60fps GPU Animated)
           AnimatedContainer(
             duration: const Duration(milliseconds: 300),
             width: double.infinity,
-            padding: EdgeInsets.fromLTRB(20, MediaQuery.of(context).padding.top + 12, 20, 26),
+            padding: EdgeInsets.fromLTRB(20, MediaQuery.of(context).padding.top + 12, 20, 24),
             decoration: BoxDecoration(
               gradient: LinearGradient(colors: [primary, primary2], begin: Alignment.topLeft, end: Alignment.bottomRight),
               borderRadius: const BorderRadius.vertical(bottom: Radius.circular(30)),
@@ -278,7 +347,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                     ),
                     const Spacer(),
                     IconButton(
-                      tooltip: 'Ganti Tema Preview',
+                      tooltip: 'Ganti Tema',
                       onPressed: () => setState(() => _darkTheme = !_darkTheme),
                       icon: Icon(_darkTheme ? Icons.light_mode : Icons.dark_mode, color: onPrimary),
                     ),
@@ -300,8 +369,6 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
               ],
             ),
           ),
-
-          // BODY FORM DENGAN ENTRANCE & SLIDE SWITCHER 60fps
           Expanded(
             child: FadeTransition(
               opacity: _fadeAnim,
@@ -331,10 +398,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                           switchOutCurve: Curves.easeInCubic,
                           transitionBuilder: (child, anim) {
                             final forward = _modeIndex >= _prevModeIndex;
-                            final offset = Tween<Offset>(
-                              begin: Offset(forward ? 0.12 : -0.12, 0),
-                              end: Offset.zero,
-                            ).animate(anim);
+                            final offset = Tween<Offset>(begin: Offset(forward ? 0.12 : -0.12, 0), end: Offset.zero).animate(anim);
                             return FadeTransition(opacity: anim, child: SlideTransition(position: offset, child: child));
                           },
                           child: Container(
@@ -349,8 +413,8 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                             child: _modeIndex == 0
                                 ? _buildLoginCard(textCol, mutedCol, primary, onPrimary)
                                 : (_modeIndex == 1
-                                    ? _buildRegisterCard(textCol, mutedCol, primary)
-                                    : _buildResetCard(textCol, mutedCol, primary)),
+                                    ? _buildRegisterCard(textCol, mutedCol)
+                                    : _buildResetCard(textCol, mutedCol)),
                           ),
                         ),
                         const SizedBox(height: 18),
@@ -371,9 +435,69 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _field(_loginPhoneC, 'Nomor WhatsApp (08... / 628...)', Icons.phone_android, textCol, mutedCol, type: TextInputType.phone),
+        // Pilihan Metode Masuk: No. WA atau Gmail
+        Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: _darkTheme ? const Color(0xFF131B2B) : const Color(0xFFF1F5FB),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => setState(() {
+                    _loginWithGmail = false;
+                    _errorMsg = null;
+                  }),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    decoration: BoxDecoration(
+                      color: !_loginWithGmail ? primary : Colors.transparent,
+                      borderRadius: BorderRadius.circular(11),
+                    ),
+                    child: Text(
+                      'No. WhatsApp',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: !_loginWithGmail ? onPrimary : mutedCol),
+                    ),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => setState(() {
+                    _loginWithGmail = true;
+                    _errorMsg = null;
+                  }),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    decoration: BoxDecoration(
+                      color: _loginWithGmail ? primary : Colors.transparent,
+                      borderRadius: BorderRadius.circular(11),
+                    ),
+                    child: Text(
+                      'Gmail',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: _loginWithGmail ? onPrimary : mutedCol),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 220),
+          child: _loginWithGmail
+              ? _field(_loginGmailC, 'Alamat Gmail Terverifikasi', Icons.email_outlined, textCol, mutedCol, key: const ValueKey('gm'), type: TextInputType.emailAddress)
+              : _field(_loginPhoneC, 'Nomor WhatsApp (08... / 628...)', Icons.phone_android, textCol, mutedCol, key: const ValueKey('wa'), type: TextInputType.phone),
+        ),
         const SizedBox(height: 12),
-        _passField(_loginPassC, 'Password', _hideLoginPass, () => setState(() => _hideLoginPass = !_hideLoginPass), textCol, mutedCol),
+        _passField(_loginPassC, _loginWithGmail ? 'Password Email' : 'Password Akun', _hideLoginPass, () => setState(() => _hideLoginPass = !_hideLoginPass), textCol, mutedCol),
         Align(
           alignment: Alignment.centerRight,
           child: TextButton(
@@ -381,22 +505,18 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
             child: Text('Lupa Password? Reset via WA', style: TextStyle(color: primary, fontWeight: FontWeight.w700, fontSize: 13)),
           ),
         ),
-        const SizedBox(height: 4),
         _ScaleButton(
           onTap: _loginBusy ? null : _doLogin,
           color: primary,
           textColor: onPrimary,
-          label: _loginBusy ? 'Memeriksa...' : 'Masuk Sekarang',
-          icon: Icons.login,
+          label: _loginBusy ? 'Memeriksa...' : (_loginWithGmail ? 'Masuk dengan Gmail' : 'Masuk Sekarang'),
+          icon: _loginWithGmail ? Icons.mail : Icons.login,
         ),
         const SizedBox(height: 10),
         SizedBox(
           height: 46,
           child: OutlinedButton(
-            style: OutlinedButton.styleFrom(
-              foregroundColor: textCol,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            ),
+            style: OutlinedButton.styleFrom(foregroundColor: textCol, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('Lanjut sebagai Tamu'),
           ),
@@ -405,10 +525,12 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildRegisterCard(Color textCol, Color mutedCol, Color primary) {
+  Widget _buildRegisterCard(Color textCol, Color mutedCol) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        _field(_regPhoneC, 'Nomor WhatsApp (08... / 628...)', Icons.phone_android, textCol, mutedCol, type: TextInputType.phone),
+        const SizedBox(height: 12),
         _field(_regNameC, 'Nama Lengkap', Icons.person, textCol, mutedCol),
         const SizedBox(height: 12),
         _passField(_regPassC, 'Buat Password (min. 6 huruf)', _hideRegPass1, () => setState(() => _hideRegPass1 = !_hideRegPass1), textCol, mutedCol),
@@ -424,19 +546,21 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
           label: _waWaiting ? 'Menunggu Verifikasi WA...' : 'Daftar & Verifikasi WhatsApp',
           icon: Icons.chat,
         ),
-        if (_waWaiting && _waCode != null)
+        if (_waWaiting && _waCode != null && _expectedPhone != null)
           TextButton(
-            onPressed: () => _showReverseOtpSheet('Verifikasi Daftar Akun', _waCode!),
+            onPressed: () => _showReverseOtpSheet('Verifikasi Daftar Akun', _waCode!, _expectedPhone!),
             child: const Text('Buka Lagi Jendela Kode WA'),
           ),
       ],
     );
   }
 
-  Widget _buildResetCard(Color textCol, Color mutedCol, Color primary) {
+  Widget _buildResetCard(Color textCol, Color mutedCol) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        _field(_resetPhoneC, 'Nomor WhatsApp Terdaftar (08...)', Icons.phone_android, textCol, mutedCol, type: TextInputType.phone),
+        const SizedBox(height: 12),
         _passField(_resetPassC, 'Password Baru (min. 6 huruf)', _hideResPass1, () => setState(() => _hideResPass1 = !_hideResPass1), textCol, mutedCol),
         const SizedBox(height: 12),
         _passField(_resetPass2C, 'Ulangi Password Baru', _hideResPass2, () => setState(() => _hideResPass2 = !_hideResPass2), textCol, mutedCol),
@@ -448,6 +572,11 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
           label: _waWaiting ? 'Menunggu Verifikasi WA...' : 'Verifikasi Pemilik WA & Simpan',
           icon: Icons.verified_user,
         ),
+        if (_waWaiting && _waCode != null && _expectedPhone != null)
+          TextButton(
+            onPressed: () => _showReverseOtpSheet('Verifikasi Reset Password', _waCode!, _expectedPhone!),
+            child: const Text('Buka Lagi Jendela Kode WA'),
+          ),
       ],
     );
   }
@@ -477,8 +606,9 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
     );
   }
 
-  Widget _field(TextEditingController c, String label, IconData icon, Color textCol, Color mutedCol, {TextInputType? type}) {
+  Widget _field(TextEditingController c, String label, IconData icon, Color textCol, Color mutedCol, {Key? key, TextInputType? type}) {
     return TextField(
+      key: key,
       controller: c,
       keyboardType: type,
       style: TextStyle(color: textCol),
