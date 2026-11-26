@@ -56,7 +56,8 @@ jobs:
         run: flutter build apk --release
 
       - name: Print APK SHA-1 Fingerprint
-        run: keytool -printcert -jarfile build/app/outputs/flutter-apk/app-release.apk | grep -E "SHA1:|SHA256:"
+        run: |
+          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android | grep -E "SHA1:|SHA256:" || true
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
