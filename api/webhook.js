@@ -20,7 +20,6 @@ module.exports = async (req, res) => {
     const message = String(raw.message || '').toUpperCase();
     const senderName = String(raw.name || '');
 
-    // Cari kode format 2S-XXXXXX di pesan WA yang masuk
     const match = message.match(/2S-[A-Z0-9]{6}/);
     if (match && sender) {
       const otpCode = match[0];
@@ -32,21 +31,31 @@ module.exports = async (req, res) => {
         .get();
 
       if (!snap.empty) {
-        await snap.docs[0].ref.update({
+        const doc = snap.docs[0];
+        const session = doc.data() || {};
+        const expectedPhone = String(session.expectedPhone || '').replace(/\D/g, '');
+
+        // VALIDASI KETAT: Jika nomor pengirim BEDA dengan yang diinput, JANGAN verified!
+        if (expectedPhone && sender !== expectedPhone) {
+          await doc.ref.update({
+            mismatchSender: sender,
+            mismatchAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          return res.status(200).json({ status: true, verified: false, reason: 'phone_mismatch' });
+        }
+
+        // Nomor cocok -> Loloskan!
+        await doc.ref.update({
           status: 'verified',
           phone: sender,
           waName: senderName,
           verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
 
-        // Opsional: Balas WA konfirmasi (hapus/kosongkan FONNTE_TOKEN jika ingin hemat 0 kuota)
         if (process.env.FONNTE_TOKEN) {
           const params = new URLSearchParams();
           params.append('target', sender);
-          params.append(
-            'message',
-            '✅ Verifikasi *2S Member* berhasil! Silakan kembali ke aplikasi.'
-          );
+          params.append('message', '✅ Verifikasi *2S Member* berhasil! Silakan kembali ke aplikasi.');
           await fetch('https://api.fonnte.com/send', {
             method: 'POST',
             headers: { Authorization: process.env.FONNTE_TOKEN },
@@ -59,6 +68,5 @@ module.exports = async (req, res) => {
     console.error('Fonnte Webhook Error:', err);
   }
 
-  // Fonnte mewajibkan response HTTP 200
   return res.status(200).json({ status: true });
 };
