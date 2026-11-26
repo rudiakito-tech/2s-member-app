@@ -5,6 +5,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'app_config.dart';
 import 'auth_page.dart';
 import 'data_store.dart';
+import 'jp_theme_widgets.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,11 +23,16 @@ class TwoSMemberApp extends StatefulWidget {
 
 class _TwoSMemberAppState extends State<TwoSMemberApp> {
   final AppDataController ctrl = AppDataController();
+  bool _splashMinDone = false;
+  bool _skippedToGuest = false;
 
   @override
   void initState() {
     super.initState();
     ctrl.initSession();
+    Future.delayed(const Duration(milliseconds: 1800), () {
+      if (mounted) setState(() => _splashMinDone = true);
+    });
   }
 
   @override
@@ -34,29 +40,94 @@ class _TwoSMemberAppState extends State<TwoSMemberApp> {
     return ListenableBuilder(
       listenable: ctrl,
       builder: (context, _) {
+        final ready = ctrl.isInitialized && _splashMinDone;
+        Widget screen;
+        if (!ready) {
+          screen = const SplashScreenPage(key: ValueKey('splash'));
+        } else if (ctrl.isGuest && !_skippedToGuest) {
+          screen = AuthPage(
+            key: const ValueKey('auth'),
+            ctrl: ctrl,
+            onSkipToDashboard: () => setState(() => _skippedToGuest = true),
+          );
+        } else {
+          screen = MainShell(key: const ValueKey('main'), ctrl: ctrl);
+        }
+
         return MaterialApp(
           debugShowCheckedModeBanner: false,
           title: AppConfig.appName,
           theme: ThemeData(
             useMaterial3: true,
-            colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0D47A1)),
+            scaffoldBackgroundColor: JpColors.creamBg,
+            colorScheme: ColorScheme.fromSeed(seedColor: JpColors.orange, primary: JpColors.navy),
           ),
-          home: !ctrl.isInitialized
-              ? const Scaffold(
-                  body: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.build_circle, size: 64, color: Color(0xFF0D47A1)),
-                        SizedBox(height: 16),
-                        CircularProgressIndicator(),
-                      ],
-                    ),
-                  ),
-                )
-              : MainShell(ctrl: ctrl),
+          home: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 350),
+            child: screen,
+          ),
         );
       },
+    );
+  }
+}
+
+// 1. LAYAR SPLASH SCREEN
+class SplashScreenPage extends StatelessWidget {
+  const SplashScreenPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: JpBackdrop(
+        topFuji: true,
+        bottomFuji: true,
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+            child: Column(
+              children: [
+                const SizedBox(height: 18),
+                const TwoSMemberLogo(scale: 1.15),
+                const SizedBox(height: 8),
+                const Text(
+                  'Member Lebih Untung, Bersama 2S',
+                  style: TextStyle(color: JpColors.navy, fontWeight: FontWeight.w700, fontSize: 13.5),
+                ),
+                const Spacer(),
+                const JpMascotBadge(
+                  bubbleText: 'Nikmati Berbagai Keuntungan Menarik hanya di 2S Member!',
+                ),
+                const Spacer(),
+                TweenAnimationBuilder<double>(
+                  tween: Tween(begin: 0.08, end: 1.0),
+                  duration: const Duration(milliseconds: 1700),
+                  curve: Curves.easeOutCubic,
+                  builder: (_, val, __) => Column(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: LinearProgressIndicator(
+                          value: val,
+                          minHeight: 8,
+                          backgroundColor: Colors.white.withValues(alpha: 0.7),
+                          valueColor: const AlwaysStoppedAnimation<Color>(JpColors.orange),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      const Text(
+                        'Memuat aplikasi...',
+                        style: TextStyle(color: JpColors.navyMuted, fontSize: 12.5, fontStyle: FontStyle.italic),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 60),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -70,7 +141,7 @@ void promptLoginDialog(BuildContext context, AppDataController ctrl, String acti
     context: context,
     builder: (ctx) => AlertDialog(
       title: const Text('Masuk atau Daftar Dulu'),
-      content: Text('Untuk $actionName, Anda harus Masuk atau Daftar akun 2S Member terlebih dahulu.'),
+      content: Text('Untuk $actionName, silakan Login atau Daftar akun 2S Member terlebih dahulu.'),
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Nanti')),
         OutlinedButton(
@@ -85,7 +156,7 @@ void promptLoginDialog(BuildContext context, AppDataController ctrl, String acti
             Navigator.pop(ctx);
             openAuthPage(context, ctrl, tab: 0);
           },
-          child: const Text('Masuk'),
+          child: const Text('Login'),
         ),
       ],
     ),
@@ -113,14 +184,15 @@ class _MainShellState extends State<MainShell> {
     ];
     return Scaffold(
       appBar: AppBar(
-        title: const Text('2S Member'),
+        backgroundColor: JpColors.creamLight,
+        title: const Text('2S Member', style: TextStyle(fontWeight: FontWeight.w800, color: JpColors.navy)),
         actions: [
           if (widget.ctrl.isGuest)
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: FilledButton.tonal(
                 onPressed: () => openAuthPage(context, widget.ctrl, tab: 0),
-                child: const Text('Masuk / Daftar'),
+                child: const Text('Login / Daftar'),
               ),
             )
           else if (widget.ctrl.canUseAdmin)
@@ -209,7 +281,7 @@ class HomeServiceTab extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         children: [
           Card(
-            color: const Color(0xFF0D47A1),
+            color: JpColors.navy,
             child: Padding(
               padding: const EdgeInsets.all(18),
               child: Column(
@@ -217,16 +289,16 @@ class HomeServiceTab extends StatelessWidget {
                 children: [
                   const Row(
                     children: [
-                      Icon(Icons.card_giftcard, color: Colors.amber),
+                      Icon(Icons.card_giftcard, color: JpColors.gold),
                       SizedBox(width: 8),
-                      Text('Mode Tamu • Promo Member Baru', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
+                      Text('Mode Tamu • Promo Member Baru', style: TextStyle(color: JpColors.gold, fontWeight: FontWeight.bold)),
                     ],
                   ),
                   const SizedBox(height: 8),
                   const Text('Selamat Datang di 2S Service HP!', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 6),
                   const Text(
-                    'Anda wajib Masuk atau Daftar terlebih dahulu untuk melihat status servis HP, e-Nota, klaim garansi, Check-in poin & belanja Store.',
+                    'Login atau Daftar untuk melacak servis HP, melihat e-Nota & garansi, Check-in poin & belanja Store.',
                     style: TextStyle(color: Colors.white70),
                   ),
                   const SizedBox(height: 14),
@@ -234,9 +306,9 @@ class HomeServiceTab extends StatelessWidget {
                     children: [
                       Expanded(
                         child: FilledButton(
-                          style: FilledButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
+                          style: FilledButton.styleFrom(backgroundColor: JpColors.orange, foregroundColor: Colors.white),
                           onPressed: () => openAuthPage(context, ctrl, tab: 0),
-                          child: const Text('Masuk', style: TextStyle(fontWeight: FontWeight.bold)),
+                          child: const Text('Login', style: TextStyle(fontWeight: FontWeight.bold)),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -272,7 +344,7 @@ class HomeServiceTab extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       children: [
         Card(
-          color: const Color(0xFF0D47A1),
+          color: JpColors.navy,
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
@@ -286,7 +358,7 @@ class HomeServiceTab extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 8),
-                Text('${u.points} Poin', style: const TextStyle(color: Colors.amber, fontSize: 26, fontWeight: FontWeight.bold)),
+                Text('${u.points} Poin', style: const TextStyle(color: JpColors.gold, fontSize: 26, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
@@ -311,12 +383,7 @@ class HomeServiceTab extends StatelessWidget {
         const Text('Transaksi Servis, Nota & Garansi', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
         if (visibleServices.isEmpty)
-          const Card(
-            child: Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('Belum ada transaksi servis atas nomor WA Anda.'),
-            ),
-          ),
+          const Card(child: Padding(padding: EdgeInsets.all(16), child: Text('Belum ada transaksi servis atas nomor WA Anda.'))),
         ...visibleServices.map((s) => Card(
               margin: const EdgeInsets.only(bottom: 12),
               child: Padding(
@@ -344,24 +411,14 @@ class HomeServiceTab extends StatelessWidget {
                     Wrap(
                       spacing: 8,
                       children: [
-                        OutlinedButton.icon(
-                          onPressed: () => _showNotaDialog(context, s),
-                          icon: const Icon(Icons.receipt_long, size: 18),
-                          label: const Text('e-Nota'),
-                        ),
+                        OutlinedButton.icon(onPressed: () => _showNotaDialog(context, s), icon: const Icon(Icons.receipt_long, size: 18), label: const Text('e-Nota')),
                         if ((s.status == 'Selesai' || s.status == 'Diambil') && s.remainingWarrantyDays > 0 && !s.warrantyClaimed)
-                          OutlinedButton.icon(
-                            onPressed: () => ctrl.claimWarranty(s),
-                            icon: const Icon(Icons.verified_user, size: 18),
-                            label: const Text('Klaim Garansi'),
-                          ),
+                          OutlinedButton.icon(onPressed: () => ctrl.claimWarranty(s), icon: const Icon(Icons.verified_user, size: 18), label: const Text('Klaim Garansi')),
                         if (s.warrantyClaimed) const Chip(label: Text('Garansi Diajukan')),
                         if (ctrl.isAdminMode)
                           DropdownButton<String>(
                             value: s.status,
-                            items: ['Menunggu Cek', 'Dikerjakan', 'Selesai', 'Diambil']
-                                .map((st) => DropdownMenuItem(value: st, child: Text(st)))
-                                .toList(),
+                            items: ['Menunggu Cek', 'Dikerjakan', 'Selesai', 'Diambil'].map((st) => DropdownMenuItem(value: st, child: Text(st))).toList(),
                             onChanged: (v) {
                               if (v != null) ctrl.updateServiceStatus(s, v);
                             },
@@ -422,8 +479,8 @@ class _StoreTabState extends State<StoreTab> {
             color: Colors.amber.withValues(alpha: 0.15),
             child: ListTile(
               leading: const Icon(Icons.info, color: Colors.orange),
-              title: const Text('Mode Tamu: Anda bisa lihat katalog promo. Masuk/Daftar untuk membeli!'),
-              trailing: TextButton(onPressed: () => openAuthPage(context, widget.ctrl), child: const Text('Masuk')),
+              title: const Text('Mode Tamu: Lihat katalog promo. Login untuk membeli!'),
+              trailing: TextButton(onPressed: () => openAuthPage(context, widget.ctrl), child: const Text('Login')),
             ),
           ),
         if (widget.ctrl.extraStoreDiscount > 0)
@@ -555,7 +612,7 @@ class LeaderboardAffiliateTab extends StatelessWidget {
                 const Text('Program Affiliate 2S Member', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),
                 if (u == null) ...[
-                  const Text('Masuk atau daftar untuk mendapatkan kode referral unik dan komisi +100 Poin tiap teman mendaftar!'),
+                  const Text('Login atau daftar untuk mendapatkan kode referral unik & komisi +100 Poin tiap teman mendaftar!'),
                   const SizedBox(height: 8),
                   FilledButton(onPressed: () => openAuthPage(context, ctrl, tab: 1), child: const Text('Daftar Sekarang')),
                 ] else ...[
@@ -620,19 +677,11 @@ class _ProfileTabState extends State<ProfileTab> {
               const SizedBox(height: 12),
               const Text('Anda belum login', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
               const SizedBox(height: 6),
-              const Text('Masuk atau daftar untuk melihat profil, poin, dan verifikasi email.', textAlign: TextAlign.center),
+              const Text('Login atau daftar untuk melihat profil, poin, dan verifikasi email.', textAlign: TextAlign.center),
               const SizedBox(height: 18),
-              FilledButton.icon(
-                onPressed: () => openAuthPage(context, widget.ctrl, tab: 0),
-                icon: const Icon(Icons.login),
-                label: const Text('Masuk Akun'),
-              ),
+              FilledButton.icon(onPressed: () => openAuthPage(context, widget.ctrl, tab: 0), icon: const Icon(Icons.login), label: const Text('Login')),
               const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: () => openAuthPage(context, widget.ctrl, tab: 1),
-                icon: const Icon(Icons.person_add),
-                label: const Text('Daftar Akun Baru'),
-              ),
+              OutlinedButton.icon(onPressed: () => openAuthPage(context, widget.ctrl, tab: 1), icon: const Icon(Icons.person_add), label: const Text('Daftar Akun')),
             ],
           ),
         ),
