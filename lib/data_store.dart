@@ -214,6 +214,13 @@ class AppDataController extends ChangeNotifier {
     return 'Rp $buf';
   }
 
+  String buildWaOtpMessage(String code) {
+    return '*Konfirmasi Akun 2S Member*\n\n'
+        'Pesan ini digunakan untuk mengonfirmasi kepemilikan nomor WhatsApp akun Anda. '
+        'Setelah mengirim pesan ini, silakan buka kembali aplikasi *2S Member*.\n\n'
+        'Kode Verifikasi: *$code*';
+  }
+
   Future<void> initSession() async {
     try {
       _listenStoreCatalog();
@@ -393,7 +400,7 @@ class AppDataController extends ChangeNotifier {
 
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     final rnd = Random();
-    final code = '2S-${List.generate(6, (_) => chars[rnd.nextInt(chars.length)]).join()}';
+    final code = List.generate(6, (_) => chars[rnd.nextInt(chars.length)]).join();
 
     final sessionDoc = await _db.collection('otp_sessions').add({
       'code': code,
@@ -694,7 +701,6 @@ class AppDataController extends ChangeNotifier {
     await addPoints(50, 'Bonus Verifikasi Email');
   }
 
-  // GAMIFIKASI HARIAN ANTI-CURANG (TERSIMPAN DI FIRESTORE)
   bool canCheckInToday() => currentUser != null && !_isSameDay(currentUser!.lastCheckInDate);
   bool canSpinFreeToday() => currentUser != null && !_isSameDay(currentUser!.lastSpinDate);
 
@@ -783,7 +789,6 @@ class AppDataController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // TRANSAKSI SERVIS + FOTO CLOUDINARY
   Future<void> addNewService(
     String custPhone,
     String device,
@@ -825,7 +830,6 @@ class AppDataController extends ChangeNotifier {
     await _db.collection('services').doc(s.id).update({'warrantyClaimed': true});
   }
 
-  // STORE: KELOLA PRODUK, VOUCHER, & ORDER FIRESTORE
   Future<void> addProduct({
     required String name,
     required String category,
