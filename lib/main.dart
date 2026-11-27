@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'app_config.dart';
 import 'auth_page.dart';
+import 'cloudinary_service.dart';
 import 'data_store.dart';
 import 'jp_theme_widgets.dart';
 
@@ -62,17 +63,13 @@ class _TwoSMemberAppState extends State<TwoSMemberApp> {
             scaffoldBackgroundColor: JpColors.creamBg,
             colorScheme: ColorScheme.fromSeed(seedColor: JpColors.orange, primary: JpColors.navy),
           ),
-          home: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 350),
-            child: screen,
-          ),
+          home: AnimatedSwitcher(duration: const Duration(milliseconds: 350), child: screen),
         );
       },
     );
   }
 }
 
-// 1. LAYAR SPLASH SCREEN
 class SplashScreenPage extends StatelessWidget {
   const SplashScreenPage({super.key});
 
@@ -90,14 +87,9 @@ class SplashScreenPage extends StatelessWidget {
                 const SizedBox(height: 18),
                 const TwoSMemberLogo(scale: 1.15),
                 const SizedBox(height: 8),
-                const Text(
-                  'Member Lebih Untung, Bersama 2S',
-                  style: TextStyle(color: JpColors.navy, fontWeight: FontWeight.w700, fontSize: 13.5),
-                ),
+                const Text('Member Lebih Untung, Bersama 2S', style: TextStyle(color: JpColors.navy, fontWeight: FontWeight.w700, fontSize: 13.5)),
                 const Spacer(),
-                const JpMascotBadge(
-                  bubbleText: 'Nikmati Berbagai Keuntungan Menarik hanya di 2S Member!',
-                ),
+                const JpMascotBadge(bubbleText: 'Nikmati Berbagai Keuntungan Menarik hanya di 2S Member!'),
                 const Spacer(),
                 TweenAnimationBuilder<double>(
                   tween: Tween(begin: 0.08, end: 1.0),
@@ -115,10 +107,7 @@ class SplashScreenPage extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 10),
-                      const Text(
-                        'Memuat aplikasi...',
-                        style: TextStyle(color: JpColors.navyMuted, fontSize: 12.5, fontStyle: FontStyle.italic),
-                      ),
+                      const Text('Memuat aplikasi...', style: TextStyle(color: JpColors.navyMuted, fontSize: 12.5, fontStyle: FontStyle.italic)),
                     ],
                   ),
                 ),
@@ -190,10 +179,7 @@ class _MainShellState extends State<MainShell> {
           if (widget.ctrl.isGuest)
             Padding(
               padding: const EdgeInsets.only(right: 8),
-              child: FilledButton.tonal(
-                onPressed: () => openAuthPage(context, widget.ctrl, tab: 0),
-                child: const Text('Login / Daftar'),
-              ),
+              child: FilledButton.tonal(onPressed: () => openAuthPage(context, widget.ctrl, tab: 0), child: const Text('Login / Daftar')),
             )
           else if (widget.ctrl.canUseAdmin)
             Row(
@@ -232,39 +218,72 @@ class _MainShellState extends State<MainShell> {
     final compC = TextEditingController();
     final partC = TextEditingController();
     final costC = TextEditingController(text: '250000');
+    String photoUrl = '';
+    bool uploading = false;
+
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Tambah Transaksi Servis'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(controller: phoneC, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'No. WA Pelanggan')),
-              TextField(controller: devC, decoration: const InputDecoration(labelText: 'Tipe HP')),
-              TextField(controller: compC, decoration: const InputDecoration(labelText: 'Keluhan')),
-              TextField(controller: partC, decoration: const InputDecoration(labelText: 'Sparepart')),
-              TextField(controller: costC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Biaya (Rp)')),
-            ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: const Text('Tambah Transaksi Servis'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(controller: phoneC, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'No. WA Pelanggan')),
+                TextField(controller: devC, decoration: const InputDecoration(labelText: 'Tipe HP')),
+                TextField(controller: compC, decoration: const InputDecoration(labelText: 'Keluhan')),
+                TextField(controller: partC, decoration: const InputDecoration(labelText: 'Sparepart')),
+                TextField(controller: costC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Biaya (Rp)')),
+                const SizedBox(height: 10),
+                if (photoUrl.isNotEmpty)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Image.network(photoUrl, height: 110, width: double.infinity, fit: BoxFit.cover),
+                  ),
+                const SizedBox(height: 6),
+                OutlinedButton.icon(
+                  onPressed: uploading
+                      ? null
+                      : () async {
+                          setDlg(() => uploading = true);
+                          final res = await CloudinaryService.pickAndUpload(ctx, folder: '2s_member/services');
+                          if (!ctx.mounted) return;
+                          setDlg(() {
+                            uploading = false;
+                            if (res?.url != null) photoUrl = res!.url!;
+                          });
+                          if (res?.error != null) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res!.error!)));
+                          }
+                        },
+                  icon: uploading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.camera_alt),
+                  label: Text(photoUrl.isEmpty ? 'Upload Foto Kondisi HP' : 'Ganti Foto HP'),
+                ),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+            FilledButton(
+              onPressed: uploading
+                  ? null
+                  : () async {
+                      await widget.ctrl.addNewService(
+                        phoneC.text,
+                        devC.text.isEmpty ? 'HP Pelanggan' : devC.text,
+                        compC.text.isEmpty ? 'Pengecekan' : compC.text,
+                        partC.text.isEmpty ? 'Jasa Servis' : partC.text,
+                        int.tryParse(costC.text) ?? 150000,
+                        30,
+                        photoUrl: photoUrl,
+                      );
+                      if (ctx.mounted) Navigator.pop(ctx);
+                    },
+              child: const Text('Simpan'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
-          FilledButton(
-            onPressed: () async {
-              await widget.ctrl.addNewService(
-                phoneC.text,
-                devC.text.isEmpty ? 'HP Pelanggan' : devC.text,
-                compC.text.isEmpty ? 'Pengecekan' : compC.text,
-                partC.text.isEmpty ? 'Jasa Servis' : partC.text,
-                int.tryParse(costC.text) ?? 150000,
-                30,
-              );
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: const Text('Simpan'),
-          ),
-        ],
       ),
     );
   }
@@ -297,10 +316,7 @@ class HomeServiceTab extends StatelessWidget {
                   const SizedBox(height: 8),
                   const Text('Selamat Datang di 2S Service HP!', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 6),
-                  const Text(
-                    'Login atau Daftar untuk melacak servis HP, melihat e-Nota & garansi, Check-in poin & belanja Store.',
-                    style: TextStyle(color: Colors.white70),
-                  ),
+                  const Text('Login atau Daftar untuk melacak servis HP, e-Nota, garansi, Check-in poin & belanja Store.', style: TextStyle(color: Colors.white70)),
                   const SizedBox(height: 14),
                   Row(
                     children: [
@@ -328,17 +344,15 @@ class HomeServiceTab extends StatelessWidget {
           const SizedBox(height: 16),
           const Text('Promo & Keunggulan 2S Member', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
-          const Card(child: ListTile(leading: Icon(Icons.local_offer, color: Colors.orange), title: Text('Diskon Aksesoris Store s/d 25%'), subtitle: Text('Khusus member aktif + potongan tukar poin!'))),
-          const Card(child: ListTile(leading: Icon(Icons.verified_user, color: Colors.green), title: Text('e-Nota & Pantau Garansi Otomatis'), subtitle: Text('Tidak takut nota hilang saat klaim garansi servis.'))),
-          const Card(child: ListTile(leading: Icon(Icons.casino, color: Colors.purple), title: Text('Check-in Harian & Mini Game Berhadiah'), subtitle: Text('Kumpulkan poin gratis setiap hari & raih tier Platinum!'))),
+          const Card(child: ListTile(leading: Icon(Icons.local_offer, color: Colors.orange), title: Text('Diskon Aksesoris Store'), subtitle: Text('Gunakan kode voucher & tukar poin saat checkout!'))),
+          const Card(child: ListTile(leading: Icon(Icons.verified_user, color: Colors.green), title: Text('e-Nota & Bukti Foto Garansi'), subtitle: Text('Lengkap dengan foto kondisi HP saat masuk servis.'))),
+          const Card(child: ListTile(leading: Icon(Icons.casino, color: Colors.purple), title: Text('Check-in Harian & Mini Game'), subtitle: Text('Kumpulkan poin gratis setiap hari & raih tier Platinum!'))),
         ],
       );
     }
 
     final u = ctrl.currentUser!;
-    final visibleServices = ctrl.isAdminMode
-        ? ctrl.services
-        : ctrl.services.where((s) => s.customerPhone == u.phone).toList();
+    final visibleServices = ctrl.isAdminMode ? ctrl.services : ctrl.services.where((s) => s.customerPhone == u.phone).toList();
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -366,9 +380,7 @@ class HomeServiceTab extends StatelessWidget {
                     onPressed: ctrl.canCheckInToday()
                         ? () async {
                             final pts = await ctrl.performDailyCheckIn();
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Check-in sukses! +$pts Poin')));
-                            }
+                            if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Check-in sukses! +$pts Poin')));
                           }
                         : null,
                     icon: const Icon(Icons.calendar_today),
@@ -398,6 +410,14 @@ class HomeServiceTab extends StatelessWidget {
                         Chip(label: Text(s.status)),
                       ],
                     ),
+                    if (s.photoUrl.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: Image.network(s.photoUrl, height: 120, width: double.infinity, fit: BoxFit.cover),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
                     Text(s.deviceName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                     Text('Keluhan: ${s.complaint}'),
                     Text('Total: ${ctrl.formatRupiah(s.totalCost)}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
@@ -438,19 +458,25 @@ class HomeServiceTab extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('e-Nota 2S Service HP'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('No. Nota : ${s.invoiceNo}'),
-            Text('No. WA   : ${s.customerPhone}'),
-            Text('Perangkat: ${s.deviceName}'),
-            Text('Keluhan  : ${s.complaint}'),
-            Text('Sparepart: ${s.replacedPart}'),
-            Text('Garansi  : ${s.warrantyDays} Hari'),
-            const Divider(),
-            Text('Total    : ${ctrl.formatRupiah(s.totalCost)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          ],
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (s.photoUrl.isNotEmpty) ...[
+                ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(s.photoUrl, height: 140, width: double.infinity, fit: BoxFit.cover)),
+                const SizedBox(height: 10),
+              ],
+              Text('No. Nota : ${s.invoiceNo}'),
+              Text('No. WA   : ${s.customerPhone}'),
+              Text('Perangkat: ${s.deviceName}'),
+              Text('Keluhan  : ${s.complaint}'),
+              Text('Sparepart: ${s.replacedPart}'),
+              Text('Garansi  : ${s.warrantyDays} Hari'),
+              const Divider(),
+              Text('Total    : ${ctrl.formatRupiah(s.totalCost)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            ],
+          ),
         ),
         actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Tutup'))],
       ),
@@ -466,11 +492,166 @@ class StoreTab extends StatefulWidget {
 }
 
 class _StoreTabState extends State<StoreTab> {
-  bool _usePoints = true;
+  void _showAddProductDialog() {
+    final nameC = TextEditingController();
+    final catC = TextEditingController(text: 'Aksesoris');
+    final priceC = TextEditingController(text: '50000');
+    final discC = TextEditingController(text: '10');
+    final stockC = TextEditingController(text: '10');
+    String photoUrl = '';
+    bool uploading = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: const Text('Tambah Produk Store'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(controller: nameC, decoration: const InputDecoration(labelText: 'Nama Produk')),
+                TextField(controller: catC, decoration: const InputDecoration(labelText: 'Kategori')),
+                TextField(controller: priceC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Harga (Rp)')),
+                TextField(controller: discC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Diskon (%)')),
+                TextField(controller: stockC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Stok')),
+                const SizedBox(height: 8),
+                if (photoUrl.isNotEmpty)
+                  ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(photoUrl, height: 90, width: double.infinity, fit: BoxFit.cover)),
+                OutlinedButton.icon(
+                  onPressed: uploading
+                      ? null
+                      : () async {
+                          setDlg(() => uploading = true);
+                          final res = await CloudinaryService.pickAndUpload(ctx, folder: '2s_member/products');
+                          if (!ctx.mounted) return;
+                          setDlg(() {
+                            uploading = false;
+                            if (res?.url != null) photoUrl = res!.url!;
+                          });
+                        },
+                  icon: uploading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.image),
+                  label: Text(photoUrl.isEmpty ? 'Upload Foto Produk' : 'Ganti Foto'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+            FilledButton(
+              onPressed: uploading
+                  ? null
+                  : () async {
+                      if (nameC.text.trim().isEmpty) return;
+                      await widget.ctrl.addProduct(
+                        name: nameC.text,
+                        category: catC.text,
+                        price: int.tryParse(priceC.text) ?? 50000,
+                        discountPercent: int.tryParse(discC.text) ?? 0,
+                        stock: int.tryParse(stockC.text) ?? 10,
+                        photoUrl: photoUrl,
+                      );
+                      if (ctx.mounted) Navigator.pop(ctx);
+                    },
+              child: const Text('Simpan'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showAddVoucherDialog() {
+    final codeC = TextEditingController();
+    final discC = TextEditingController(text: '15000');
+    final minC = TextEditingController(text: '50000');
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Buat Voucher Diskon'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: codeC, decoration: const InputDecoration(labelText: 'Kode Voucher (misal: 2SBARU)')),
+            TextField(controller: discC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Potongan (Rp)')),
+            TextField(controller: minC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Minimal Belanja (Rp)')),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+          FilledButton(
+            onPressed: () async {
+              if (codeC.text.trim().isEmpty) return;
+              await widget.ctrl.addVoucher(
+                code: codeC.text,
+                discountAmount: int.tryParse(discC.text) ?? 10000,
+                minSpend: int.tryParse(minC.text) ?? 0,
+              );
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Simpan'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showCheckoutDialog(StoreProduct p) {
+    bool usePts = true;
+    String delivery = 'Ambil di Toko';
+    final voucherC = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: Text('Beli ${p.name}'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Harga: ${widget.ctrl.formatRupiah(p.finalPrice)}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                TextField(controller: voucherC, decoration: const InputDecoration(labelText: 'Kode Voucher (Opsional)', border: OutlineInputBorder())),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  value: delivery,
+                  decoration: const InputDecoration(labelText: 'Pengambilan', border: OutlineInputBorder()),
+                  items: ['Ambil di Toko', 'Kirim Kurir'].map((d) => DropdownMenuItem(value: d, child: Text(d))).toList(),
+                  onChanged: (v) => setDlg(() => delivery = v ?? 'Ambil di Toko'),
+                ),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text('Tukar Poin (${widget.ctrl.currentUser!.points} pts)'),
+                  value: usePts,
+                  onChanged: (v) => setDlg(() => usePts = v ?? true),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+            FilledButton(
+              onPressed: () async {
+                final msg = await widget.ctrl.checkoutProduct(p, usePoints: usePts, voucherCode: voucherC.text, deliveryType: delivery);
+                if (ctx.mounted) Navigator.pop(ctx);
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+              },
+              child: const Text('Konfirmasi Beli'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    final pts = widget.ctrl.currentUser?.points ?? 0;
+    final u = widget.ctrl.currentUser;
+    final myOrders = widget.ctrl.isAdminMode
+        ? widget.ctrl.storeOrders
+        : widget.ctrl.storeOrders.where((o) => o.customerPhone == u?.phone).toList();
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -483,41 +664,79 @@ class _StoreTabState extends State<StoreTab> {
               trailing: TextButton(onPressed: () => openAuthPage(context, widget.ctrl), child: const Text('Login')),
             ),
           ),
+        if (widget.ctrl.isAdminMode && widget.ctrl.canUseAdmin)
+          Card(
+            color: JpColors.navy.withValues(alpha: 0.08),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Expanded(child: FilledButton.icon(onPressed: _showAddProductDialog, icon: const Icon(Icons.add), label: const Text('Produk'))),
+                  const SizedBox(width: 8),
+                  Expanded(child: OutlinedButton.icon(onPressed: _showAddVoucherDialog, icon: const Icon(Icons.confirmation_number), label: const Text('Voucher'))),
+                ],
+              ),
+            ),
+          ),
+        if (widget.ctrl.vouchers.isNotEmpty)
+          Wrap(
+            spacing: 6,
+            children: widget.ctrl.vouchers.where((v) => v.isActive).map((v) => Chip(label: Text('Promo ${v.code}: -${widget.ctrl.formatRupiah(v.discountAmount)}'))).toList(),
+          ),
         if (widget.ctrl.extraStoreDiscount > 0)
           Card(
             color: Colors.amber.withValues(alpha: 0.2),
             child: ListTile(
               leading: const Icon(Icons.local_offer, color: Colors.orange),
-              title: Text('Voucher Aktif: Potongan ${widget.ctrl.formatRupiah(widget.ctrl.extraStoreDiscount)}'),
+              title: Text('Hadiah Spin Aktif: Potongan ${widget.ctrl.formatRupiah(widget.ctrl.extraStoreDiscount)}'),
             ),
           ),
-        if (!widget.ctrl.isGuest)
-          SwitchListTile(
-            title: Text('Tukar Poin (Saldo: $pts pts)'),
-            subtitle: const Text('1 Poin = Rp 100 potongan'),
-            value: _usePoints,
-            onChanged: (v) => setState(() => _usePoints = v),
-          ),
+        const SizedBox(height: 8),
         ...widget.ctrl.products.map((p) => Card(
               margin: const EdgeInsets.only(bottom: 10),
               child: ListTile(
-                leading: CircleAvatar(child: Icon(p.icon)),
+                leading: p.photoUrl.isNotEmpty
+                    ? ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(p.photoUrl, width: 52, height: 52, fit: BoxFit.cover))
+                    : const CircleAvatar(child: Icon(Icons.shopping_bag)),
                 title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text('${p.category} • Diskon ${p.discountPercent}%\n${widget.ctrl.formatRupiah(p.finalPrice)}'),
+                subtitle: Text('${p.category} • Diskon ${p.discountPercent}% • Stok: ${p.stock}\n${widget.ctrl.formatRupiah(p.finalPrice)}'),
                 isThreeLine: true,
-                trailing: FilledButton(
-                  onPressed: () async {
-                    if (widget.ctrl.isGuest) {
-                      promptLoginDialog(context, widget.ctrl, 'membeli produk Store');
-                      return;
-                    }
-                    final msg = await widget.ctrl.checkoutProduct(p, _usePoints);
-                    if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-                  },
-                  child: const Text('Beli'),
-                ),
+                trailing: widget.ctrl.isAdminMode
+                    ? IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => widget.ctrl.deleteProduct(p.id))
+                    : FilledButton(
+                        onPressed: p.stock <= 0
+                            ? null
+                            : () {
+                                if (widget.ctrl.isGuest) {
+                                  promptLoginDialog(context, widget.ctrl, 'membeli produk Store');
+                                  return;
+                                }
+                                _showCheckoutDialog(p);
+                              },
+                        child: Text(p.stock <= 0 ? 'Habis' : 'Beli'),
+                      ),
               ),
             )),
+        if (!widget.ctrl.isGuest && myOrders.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          Text(widget.ctrl.isAdminMode ? 'Semua Pesanan Store (Kasir)' : 'Pesanan Store Saya', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          ...myOrders.map((o) => Card(
+                child: ListTile(
+                  title: Text('${o.orderNo} • ${o.productName}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                  subtitle: Text('${o.customerName} (${o.deliveryType}) • ${widget.ctrl.formatRupiah(o.finalTotal)}'),
+                  trailing: widget.ctrl.isAdminMode
+                      ? DropdownButton<String>(
+                          value: o.status,
+                          items: ['Menunggu', 'Diproses', 'Siap Diambil', 'Selesai'].map((st) => DropdownMenuItem(value: st, child: Text(st))).toList(),
+                          onChanged: (v) {
+                            if (v != null) widget.ctrl.updateStoreOrderStatus(o, v);
+                          },
+                        )
+                      : Chip(label: Text(o.status)),
+                ),
+              )),
+        ],
       ],
     );
   }
@@ -535,7 +754,13 @@ class _GamesMissionTabState extends State<GamesMissionTab> {
 
   @override
   Widget build(BuildContext context) {
-    final u = widget.ctrl.currentUser;
+    final canFreeSpin = widget.ctrl.canSpinFreeToday();
+    final missionDefs = [
+      {'id': 'm_email', 'title': 'Verifikasi Email Resmi', 'desc': 'Verifikasi email di menu Profil', 'pts': 100},
+      {'id': 'm_checkin', 'title': 'Check-in Hari Ini', 'desc': 'Lakukan check-in harian hari ini (reset tiap hari)', 'pts': 30},
+      {'id': 'm_spin', 'title': 'Putar Spin Wheel', 'desc': 'Mainkan mini game hari ini (reset tiap hari)', 'pts': 25},
+    ];
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -564,7 +789,7 @@ class _GamesMissionTabState extends State<GamesMissionTab> {
                     final result = await widget.ctrl.spinWheelReward();
                     if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result)));
                   },
-                  child: Text(u?.freeSpinUsedToday == true ? 'Putar Lagi (20 Poin)' : 'Putar GRATIS Hari Ini!'),
+                  child: Text(canFreeSpin || widget.ctrl.isGuest ? 'Putar GRATIS Hari Ini!' : 'Putar Lagi (20 Poin)'),
                 ),
               ],
             ),
@@ -573,20 +798,27 @@ class _GamesMissionTabState extends State<GamesMissionTab> {
         const SizedBox(height: 16),
         const Text('Misi Harian Berhadiah Poin', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
-        ...widget.ctrl.missions.map((m) => Card(
-              child: ListTile(
-                title: Text(m.title, style: const TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text('${m.description} (+${m.rewardPoints} Poin)'),
-                trailing: m.isClaimed
-                    ? const Chip(label: Text('Selesai'))
-                    : FilledButton(
-                        onPressed: widget.ctrl.isGuest
-                            ? () => promptLoginDialog(context, widget.ctrl, 'klaim Misi')
-                            : (m.isCompleted ? () => widget.ctrl.claimMission(m) : null),
-                        child: Text(m.isCompleted ? 'Klaim' : 'Belum'),
-                      ),
-              ),
-            )),
+        ...missionDefs.map((m) {
+          final id = m['id'] as String;
+          final pts = m['pts'] as int;
+          final title = m['title'] as String;
+          final claimed = widget.ctrl.isMissionClaimed(id);
+          final completed = widget.ctrl.isMissionCompleted(id);
+          return Card(
+            child: ListTile(
+              title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Text('${m['desc']} (+$pts Poin)'),
+              trailing: claimed
+                  ? const Chip(label: Text('Selesai'))
+                  : FilledButton(
+                      onPressed: widget.ctrl.isGuest
+                          ? () => promptLoginDialog(context, widget.ctrl, 'klaim Misi')
+                          : (completed ? () => widget.ctrl.claimMission(id, pts, title) : null),
+                      child: Text(completed ? 'Klaim' : 'Belum'),
+                    ),
+            ),
+          );
+        }),
       ],
     );
   }
@@ -662,6 +894,7 @@ class _ProfileTabState extends State<ProfileTab> {
   final _emailC = TextEditingController();
   final _passC = TextEditingController();
   bool _sent = false;
+  bool _uploadingAvatar = false;
 
   @override
   Widget build(BuildContext context) {
@@ -693,10 +926,31 @@ class _ProfileTabState extends State<ProfileTab> {
       children: [
         Card(
           child: ListTile(
-            leading: const CircleAvatar(child: Icon(Icons.person)),
+            leading: CircleAvatar(
+              radius: 26,
+              backgroundImage: u.photoUrl.isNotEmpty ? NetworkImage(u.photoUrl) : null,
+              child: u.photoUrl.isEmpty ? const Icon(Icons.person) : null,
+            ),
             title: Text(u.name, style: const TextStyle(fontWeight: FontWeight.bold)),
             subtitle: Text('WA: ${u.phone} • Tier: ${u.tier}'),
-            trailing: const Chip(avatar: Icon(Icons.verified, color: Colors.green, size: 18), label: Text('WA OK')),
+            trailing: TextButton.icon(
+              onPressed: _uploadingAvatar
+                  ? null
+                  : () async {
+                      setState(() => _uploadingAvatar = true);
+                      final res = await CloudinaryService.pickAndUpload(context, folder: '2s_member/profiles');
+                      if (!context.mounted) return;
+                      setState(() => _uploadingAvatar = false);
+                      if (res?.url != null) {
+                        await widget.ctrl.updateProfilePhoto(res!.url!);
+                        if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Foto profil berhasil diperbarui!')));
+                      } else if (res?.error != null) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res!.error!)));
+                      }
+                    },
+              icon: _uploadingAvatar ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.camera_alt, size: 18),
+              label: const Text('Foto'),
+            ),
           ),
         ),
         const SizedBox(height: 12),
