@@ -49,6 +49,102 @@ jobs:
             sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/g' android/app/build.gradle
           fi
 
+      - name: Slice raw_sheet.png into transparent PNG assets
+        run: |
+          mkdir -p assets/images
+          if [ -f "assets/raw_sheet.png" ]; then
+            python3 -m pip install --quiet pillow
+            python3 - << 'EOF'
+          from collections import deque
+          from PIL import Image
+          import os
+
+          sheet = Image.open("assets/raw_sheet.png").convert("RGBA")
+          W, H = sheet.size
+          spx = sheet.load()
+
+          def find_split_x(x_frac, y1_frac, y2_frac, radius=25):
+              cx = int(W * x_frac)
+              best_x, best_score = cx, -1
+              for x in range(max(0, cx - radius), min(W, cx + radius)):
+                  score = sum(1 for y in range(int(H*y1_frac), int(H*y2_frac)) if min(spx[x, y][:3]) >= 238)
+                  if score > best_score:
+                      best_score, best_x = score, x
+              return best_x
+
+          def find_split_y(y_frac, x1_frac, x2_frac, radius=20):
+              cy = int(H * y_frac)
+              best_y, best_score = cy, -1
+              for y in range(max(0, cy - radius), min(H, cy + radius)):
+                  score = sum(1 for x in range(int(W*x1_frac), int(W*x2_frac)) if min(spx[x, y][:3]) >= 238)
+                  if score > best_score:
+                      best_score, best_y = score, y
+              return best_y
+
+          def remove_outer_bg(im, thr=232):
+              w, h = im.size
+              px = im.load()
+              vis = [[False]*w for _ in range(h)]
+              q = deque()
+              for x in range(w):
+                  for y in (0, h - 1):
+                      if min(px[x, y][:3]) >= thr:
+                          vis[y][x] = True
+                          q.append((x, y))
+              for y in range(h):
+                  for x in (0, w - 1):
+                      if not vis[y][x] and min(px[x, y][:3]) >= thr:
+                          vis[y][x] = True
+                          q.append((x, y))
+              while q:
+                  cx, cy = q.popleft()
+                  px[cx, cy] = (0, 0, 0, 0)
+                  for nx, ny in ((cx+1, cy), (cx-1, cy), (cx, cy+1), (cx, cy-1)):
+                      if 0 <= nx < w and 0 <= ny < h and not vis[ny][nx] and min(px[nx, ny][:3]) >= thr:
+                          vis[ny][nx] = True
+                          q.append((nx, ny))
+              box = im.getbbox()
+              return im.crop(box) if box else im
+
+          x_logo_boy = find_split_x(0.200, 0.02, 0.32)
+          x_boy_girl = find_split_x(0.376, 0.02, 0.32)
+          x_girl_fuji = find_split_x(0.573, 0.05, 0.33)
+          x_fuji_pagoda = find_split_x(0.860, 0.14, 0.41)
+          y_sakura_pagoda = find_split_y(0.125, 0.85, 0.99)
+          y_row1_end = find_split_y(0.326, 0.01, 0.57)
+          y_fuji_end = find_split_y(0.412, 0.57, 0.99)
+
+          exact_crops = {
+              "logo_2s.png": (0, 0, x_logo_boy, y_row1_end),
+              "mascot_boy.png": (x_logo_boy, 0, x_boy_girl, y_row1_end),
+              "mascot_girl.png": (x_boy_girl, 0, x_girl_fuji, y_row1_end),
+              "scene_fuji.png": (x_girl_fuji, int(H*0.075), x_fuji_pagoda, y_fuji_end),
+              "pagoda.png": (x_fuji_pagoda, y_sakura_pagoda, W, y_fuji_end),
+              "sakura_top.png": (int(W*0.805), 0, W, y_sakura_pagoda),
+              "sakura_side.png": (int(W*0.870), int(H*0.620), W, int(H*0.805)),
+              "waves_gold.png": (0, int(H*0.905), int(W*0.248), H),
+              "lantern.png": (int(W*0.905), int(H*0.768), W, H),
+              "crown_bronze.png": (0, y_row1_end, int(W*0.081), int(H*0.435)),
+              "crown_silver.png": (int(W*0.081), y_row1_end, int(W*0.157), int(H*0.435)),
+              "crown_gold.png": (int(W*0.157), y_row1_end, int(W*0.243), int(H*0.435)),
+              "crown_platinum.png": (int(W*0.330), y_row1_end, int(W*0.415), int(H*0.435)),
+          }
+
+          for name, box in exact_crops.items():
+              clean = remove_outer_bg(sheet.crop(box))
+              clean.save(os.path.join("assets/images", name))
+
+          logo = Image.open("assets/images/logo_2s.png").convert("RGBA")
+          side = max(logo.width, logo.height)
+          sq = Image.new("RGBA", (side, side), (255, 248, 236, 255))
+          sq.paste(logo, ((side - logo.width)//2, (side - logo.height)//2), logo)
+          for folder, sz in [("mipmap-mdpi", 48), ("mipmap-hdpi", 72), ("mipmap-xhdpi", 96), ("mipmap-xxhdpi", 144), ("mipmap-xxxhdpi", 192)]:
+              p = f"android/app/src/main/res/{folder}/ic_launcher.png"
+              if os.path.exists(os.path.dirname(p)):
+                  sq.resize((sz, sz), Image.LANCZOS).save(p)
+          EOF
+          fi
+
       - name: Install dependencies
         run: flutter pub get
 
@@ -64,3 +160,9 @@ jobs:
         with:
           name: 2S-Member-APK
           path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload Sliced PNG Preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sliced-PNG-Preview
+          path: assets/images/
