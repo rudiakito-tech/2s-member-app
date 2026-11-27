@@ -20,54 +20,36 @@ class TwoSMemberLogo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Transform.scale(
-      scale: scale,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              Text(
-                '2S',
-                style: TextStyle(
-                  fontSize: 40,
-                  fontWeight: FontWeight.w900,
-                  height: 0.95,
-                  letterSpacing: -1,
-                  foreground: Paint()
-                    ..style = PaintingStyle.stroke
-                    ..strokeWidth = 6
-                    ..color = JpColors.navy,
-                ),
-              ),
-              ShaderMask(
-                shaderCallback: (r) => const LinearGradient(
-                  colors: [Color(0xFFFFE066), Color(0xFFFFB300), Color(0xFFFF7A00)],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                ).createShader(r),
-                child: const Text(
-                  '2S',
-                  style: TextStyle(fontSize: 40, fontWeight: FontWeight.w900, height: 0.95, letterSpacing: -1, color: Colors.white),
-                ),
-              ),
-            ],
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-            decoration: BoxDecoration(
-              color: JpColors.navy,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: JpColors.gold, width: 1.5),
-            ),
-            child: const Text(
-              'MEMBER',
-              style: TextStyle(color: Color(0xFFFFD54F), fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 1.6),
-            ),
-          ),
-        ],
+    return Image.asset(
+      'assets/images/logo_2s.png',
+      height: 88 * scale,
+      fit: BoxFit.contain,
+      errorBuilder: (_, __, ___) => Text(
+        '2S MEMBER',
+        style: TextStyle(fontSize: 24 * scale, fontWeight: FontWeight.w900, color: JpColors.navy),
       ),
+    );
+  }
+}
+
+class JpTierCrown extends StatelessWidget {
+  final String tier;
+  final double size;
+  const JpTierCrown({super.key, required this.tier, this.size = 26});
+
+  @override
+  Widget build(BuildContext context) {
+    final map = {
+      'Bronze': 'assets/images/crown_bronze.png',
+      'Silver': 'assets/images/crown_silver.png',
+      'Gold': 'assets/images/crown_gold.png',
+      'Platinum': 'assets/images/crown_platinum.png',
+    };
+    return Image.asset(
+      map[tier] ?? 'assets/images/crown_bronze.png',
+      height: size,
+      fit: BoxFit.contain,
+      errorBuilder: (_, __, ___) => Icon(Icons.workspace_premium, size: size, color: JpColors.gold),
     );
   }
 }
@@ -118,7 +100,6 @@ class _JpOrangeButtonState extends State<JpOrangeButton> {
           ),
           child: Stack(
             children: [
-              // Efek glossy atas
               Positioned(
                 top: 3,
                 left: 16,
@@ -230,6 +211,19 @@ class _JpBackdropState extends State<JpBackdrop> with SingleTickerProviderStateM
     super.dispose();
   }
 
+  Widget _safeImg(String path, {double? height, double? width, BoxFit fit = BoxFit.contain, double opacity = 1.0}) {
+    return Opacity(
+      opacity: opacity,
+      child: Image.asset(
+        path,
+        height: height,
+        width: width,
+        fit: fit,
+        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -242,23 +236,83 @@ class _JpBackdropState extends State<JpBackdrop> with SingleTickerProviderStateM
       ),
       child: Stack(
         children: [
-          if (widget.topFuji)
+          // Pemandangan Atas (untuk Layar Login & Reset OTP)
+          if (widget.topFuji) ...[
             Positioned(
-              top: 0,
+              top: 12,
               left: 0,
               right: 0,
-              height: 155,
-              child: RepaintBoundary(child: CustomPaint(painter: _JpSceneryPainter(isTop: true))),
+              child: IgnorePointer(
+                child: Center(child: _safeImg('assets/images/scene_fuji.png', height: 125, opacity: 0.85)),
+              ),
             ),
-          if (widget.bottomFuji)
+            Positioned(
+              top: 42,
+              right: -6,
+              child: IgnorePointer(child: _safeImg('assets/images/pagoda.png', height: 115, opacity: 0.85)),
+            ),
+          ],
+
+          // Ranting Sakura Sudut Kanan Atas & Kiri
+          Positioned(
+            top: 0,
+            right: -4,
+            child: IgnorePointer(child: _safeImg('assets/images/sakura_top.png', height: 105, opacity: 0.92)),
+          ),
+          Positioned(
+            top: 30,
+            left: -12,
+            child: IgnorePointer(
+              child: Transform.flip(
+                flipX: true,
+                child: _safeImg('assets/images/sakura_side.png', height: 110, opacity: 0.65),
+              ),
+            ),
+          ),
+
+          // Pemandangan Bawah (Fuji, Pagoda, Lentera & Gelombang Emas)
+          if (widget.bottomFuji) ...[
+            Positioned(
+              bottom: 18,
+              left: 0,
+              right: 0,
+              child: IgnorePointer(
+                child: Center(child: _safeImg('assets/images/scene_fuji.png', height: 125, opacity: 0.88)),
+              ),
+            ),
+            Positioned(
+              bottom: 24,
+              right: 4,
+              child: IgnorePointer(child: _safeImg('assets/images/pagoda.png', height: 115, opacity: 0.9)),
+            ),
+            Positioned(
+              bottom: 28,
+              left: 6,
+              child: IgnorePointer(child: _safeImg('assets/images/lantern.png', height: 78, opacity: 0.9)),
+            ),
             Positioned(
               bottom: 0,
               left: 0,
               right: 0,
-              height: 170,
-              child: RepaintBoundary(child: CustomPaint(painter: _JpSceneryPainter(isTop: false))),
+              child: IgnorePointer(
+                child: Row(
+                  children: List.generate(
+                    3,
+                    (_) => Expanded(
+                      child: Image.asset(
+                        'assets/images/waves_gold.png',
+                        height: 44,
+                        fit: BoxFit.fill,
+                        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
-          // Kelopak sakura berjatuhan pelan di 60fps
+          ],
+
+          // Kelopak Sakura Jatuh 60fps
           Positioned.fill(
             child: IgnorePointer(
               child: RepaintBoundary(
@@ -269,6 +323,8 @@ class _JpBackdropState extends State<JpBackdrop> with SingleTickerProviderStateM
               ),
             ),
           ),
+
+          // Konten Layar Utama
           widget.child,
         ],
       ),
@@ -278,31 +334,27 @@ class _JpBackdropState extends State<JpBackdrop> with SingleTickerProviderStateM
 
 class JpMascotBadge extends StatelessWidget {
   final String bubbleText;
-  const JpMascotBadge({super.key, required this.bubbleText});
+  final bool useGirl;
+  const JpMascotBadge({super.key, required this.bubbleText, this.useGirl = false});
 
   @override
   Widget build(BuildContext context) {
+    final path = useGirl ? 'assets/images/mascot_girl.png' : 'assets/images/mascot_boy.png';
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Container(
-          width: 78,
-          height: 78,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: const LinearGradient(colors: [Color(0xFFFFD54F), Color(0xFFFF8F00)]),
-            border: Border.all(color: Colors.white, width: 3),
-            boxShadow: [BoxShadow(color: JpColors.orange.withValues(alpha: 0.3), blurRadius: 12)],
-          ),
-          child: const Stack(
-            alignment: Alignment.center,
-            children: [
-              Icon(Icons.face_retouching_natural, size: 46, color: JpColors.navy),
-              Positioned(bottom: 4, right: 6, child: Icon(Icons.thumb_up_alt, size: 22, color: Color(0xFFD32F2F))),
-            ],
+        Image.asset(
+          path,
+          height: 138,
+          fit: BoxFit.contain,
+          errorBuilder: (_, __, ___) => const CircleAvatar(
+            radius: 40,
+            backgroundColor: JpColors.gold,
+            child: Icon(Icons.face, size: 44, color: JpColors.navy),
           ),
         ),
-        const SizedBox(width: 12),
+        const SizedBox(width: 8),
         Flexible(
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -310,7 +362,7 @@ class JpMascotBadge extends StatelessWidget {
               color: Colors.white.withValues(alpha: 0.94),
               borderRadius: BorderRadius.circular(18),
               border: Border.all(color: JpColors.gold, width: 1.5),
-              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 10)],
+              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 10)],
             ),
             child: Text(
               bubbleText,
@@ -323,106 +375,16 @@ class JpMascotBadge extends StatelessWidget {
   }
 }
 
-class _JpSceneryPainter extends CustomPainter {
-  final bool isTop;
-  _JpSceneryPainter({required this.isTop});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width;
-    final h = size.height;
-
-    // Gunung Fuji
-    final fujiPath = Path()
-      ..moveTo(w * 0.14, h)
-      ..lineTo(w * 0.44, isTop ? h * 0.25 : h * 0.28)
-      ..lineTo(w * 0.56, isTop ? h * 0.25 : h * 0.28)
-      ..lineTo(w * 0.86, h)
-      ..close();
-    canvas.drawPath(
-      fujiPath,
-      Paint()
-        ..shader = LinearGradient(
-          colors: [const Color(0xFF4C76B8).withValues(alpha: 0.42), const Color(0xFF90B4E8).withValues(alpha: 0.18)],
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-        ).createShader(Rect.fromLTWH(0, 0, w, h)),
-    );
-
-    // Salju puncak Fuji
-    final snowPath = Path()
-      ..moveTo(w * 0.44, isTop ? h * 0.25 : h * 0.28)
-      ..lineTo(w * 0.56, isTop ? h * 0.25 : h * 0.28)
-      ..lineTo(w * 0.63, isTop ? h * 0.47 : h * 0.50)
-      ..lineTo(w * 0.54, isTop ? h * 0.42 : h * 0.45)
-      ..lineTo(w * 0.50, isTop ? h * 0.48 : h * 0.51)
-      ..lineTo(w * 0.45, isTop ? h * 0.42 : h * 0.45)
-      ..lineTo(w * 0.37, isTop ? h * 0.47 : h * 0.50)
-      ..close();
-    canvas.drawPath(snowPath, Paint()..color = Colors.white.withValues(alpha: 0.85));
-
-    // Siluet Pagoda di kanan
-    final pagPaint = Paint()..color = const Color(0xFF9E2A2B).withValues(alpha: 0.68);
-    for (int lvl = 0; lvl < 3; lvl++) {
-      final y = h - 42 - (lvl * 22.0);
-      final half = 26.0 - (lvl * 4.5);
-      canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromCenter(center: Offset(w * 0.84, y), width: half * 2, height: 8), const Radius.circular(3)), pagPaint);
-      canvas.drawRect(Rect.fromCenter(center: Offset(w * 0.84, y + 10), width: half * 1.1, height: 12), pagPaint);
-    }
-
-    // Siluet Gerbang Torii di kiri
-    final toriiPaint = Paint()..color = const Color(0xFFD32F2F).withValues(alpha: 0.72);
-    canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(w * 0.08, h - 72, 54, 7), const Radius.circular(3)), toriiPaint);
-    canvas.drawRect(Rect.fromLTWH(w * 0.11, h - 60, 42, 5), toriiPaint);
-    canvas.drawRect(Rect.fromLTWH(w * 0.14, h - 66, 6, 46), toriiPaint);
-    canvas.drawRect(Rect.fromLTWH(w * 0.22, h - 66, 6, 46), toriiPaint);
-
-    // Gelombang emas Seigaiha di dasar bawah
-    if (!isTop) {
-      final wavePaint = Paint()..color = const Color(0xFFFFD54F).withValues(alpha: 0.6);
-      final ringPaint = Paint()
-        ..color = const Color(0xFFFFA000).withValues(alpha: 0.55)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.4;
-      for (double x = 0; x <= w + 36; x += 38) {
-        canvas.drawCircle(Offset(x, h), 24, wavePaint);
-        canvas.drawCircle(Offset(x, h), 24, ringPaint);
-        canvas.drawCircle(Offset(x, h), 15, ringPaint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
 class _SakuraPetalPainter extends CustomPainter {
   final double t;
   _SakuraPetalPainter(this.t);
 
-  void _drawFlower(Canvas canvas, Offset center, double r, Color c) {
-    final p = Paint()..color = c;
-    for (int i = 0; i < 5; i++) {
-      final a = (i * 2 * pi / 5) - pi / 2;
-      canvas.drawCircle(Offset(center.dx + cos(a) * r * 0.65, center.dy + sin(a) * r * 0.65), r * 0.52, p);
-    }
-    canvas.drawCircle(center, r * 0.28, Paint()..color = const Color(0xFFFFE082));
-  }
-
   @override
   void paint(Canvas canvas, Size size) {
-    // Rumpun sakura sudut kanan & kiri atas
-    _drawFlower(canvas, Offset(size.width - 26, 56), 14, JpColors.sakuraPink.withValues(alpha: 0.85));
-    _drawFlower(canvas, Offset(size.width - 54, 42), 11, JpColors.sakuraDeep.withValues(alpha: 0.65));
-    _drawFlower(canvas, Offset(size.width - 18, 92), 10, JpColors.sakuraPink.withValues(alpha: 0.75));
-    _drawFlower(canvas, const Offset(28, 76), 12, JpColors.sakuraPink.withValues(alpha: 0.75));
-    _drawFlower(canvas, const Offset(56, 58), 9, JpColors.sakuraDeep.withValues(alpha: 0.55));
-
-    // 7 kelopak sakura jatuh perlahan
     final petalPaint = Paint()..color = JpColors.sakuraDeep.withValues(alpha: 0.45);
-    for (int i = 0; i < 7; i++) {
-      final px = ((i * 0.17 + 0.08) * size.width) + sin((t * 2 * pi) + i) * 16;
-      final py = ((t + i * 0.14) % 1.0) * size.height;
+    for (int i = 0; i < 8; i++) {
+      final px = ((i * 0.14 + 0.06) * size.width) + sin((t * 2 * pi) + i) * 18;
+      final py = ((t + i * 0.125) % 1.0) * size.height;
       canvas.save();
       canvas.translate(px, py);
       canvas.rotate(t * 2 * pi + i);
