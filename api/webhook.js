@@ -20,9 +20,12 @@ module.exports = async (req, res) => {
     const message = String(raw.message || '').toUpperCase();
     const senderName = String(raw.name || '');
 
-    const match = message.match(/2S-[A-Z0-9]{6}/);
-    if (match && sender) {
-      const otpCode = match[0];
+    // Baca kode 6 digit setelah "KODE VERIFIKASI:" atau format lama "2S-"
+    const matchNew = message.match(/KODE\s+VERIFIKASI\s*[:\-]\s*\*?\s*([A-Z0-9]{6})\s*\*?/);
+    const matchOld = message.match(/2S-[A-Z0-9]{6}/);
+    const otpCode = matchNew ? matchNew[1] : (matchOld ? matchOld[0] : null);
+
+    if (otpCode && sender) {
       const snap = await db
         .collection('otp_sessions')
         .where('code', '==', otpCode)
@@ -35,7 +38,6 @@ module.exports = async (req, res) => {
         const session = doc.data() || {};
         const expectedPhone = String(session.expectedPhone || '').replace(/\D/g, '');
 
-        // VALIDASI KETAT: Jika nomor pengirim BEDA dengan yang diinput, JANGAN verified!
         if (expectedPhone && sender !== expectedPhone) {
           await doc.ref.update({
             mismatchSender: sender,
@@ -44,7 +46,6 @@ module.exports = async (req, res) => {
           return res.status(200).json({ status: true, verified: false, reason: 'phone_mismatch' });
         }
 
-        // Nomor cocok -> Loloskan!
         await doc.ref.update({
           status: 'verified',
           phone: sender,
@@ -55,7 +56,10 @@ module.exports = async (req, res) => {
         if (process.env.FONNTE_TOKEN) {
           const params = new URLSearchParams();
           params.append('target', sender);
-          params.append('message', '✅ Verifikasi *2S Member* berhasil! Silakan kembali ke aplikasi.');
+          params.append(
+            'message',
+            '✅ Nomor WhatsApp Anda berhasil dikonfirmasi! Silakan buka kembali aplikasi *2S Member*.'
+          );
           await fetch('https://api.fonnte.com/send', {
             method: 'POST',
             headers: { Authorization: process.env.FONNTE_TOKEN },
