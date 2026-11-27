@@ -124,10 +124,7 @@ class _AuthPageState extends State<AuthPage> {
     final res = await widget.ctrl.signInWithGoogleButton();
     if (!mounted) return;
     setState(() => _googleBusy = false);
-    if (res.error != null) {
-      setState(() => _errorMsg = res.error);
-      return;
-    }
+    if (res.error != null) return setState(() => _errorMsg = res.error);
     if (res.loggedIn) {
       _finishAuthToDashboard();
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Berhasil login Google (${res.email})!')));
@@ -255,7 +252,8 @@ class _AuthPageState extends State<AuthPage> {
 
   Future<void> _launchWa() async {
     if (_otpCode == null) return;
-    final url = Uri.parse('https://wa.me/${AppConfig.businessWaNumber}?text=${Uri.encodeComponent('LOGIN $_otpCode')}');
+    final text = widget.ctrl.buildWaOtpMessage(_otpCode!);
+    final url = Uri.parse('https://wa.me/${AppConfig.businessWaNumber}?text=${Uri.encodeComponent(text)}');
     await launchUrl(url, mode: LaunchMode.externalApplication);
   }
 
@@ -454,7 +452,8 @@ class _AuthPageState extends State<AuthPage> {
   }
 
   Widget _otpView({required bool isReset}) {
-    final chars = (_otpCode ?? '2S-000000').replaceFirst('2S-', '').padRight(6, '0').split('').take(6).toList();
+    final code = _otpCode ?? '000000';
+    final chars = code.padRight(6, '0').split('').take(6).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -463,19 +462,15 @@ class _AuthPageState extends State<AuthPage> {
           widget.ctrl.cancelOtpWait();
           _go(isReset ? AuthStep.forgotPassword : AuthStep.register);
         }),
-        SizedBox(height: isReset ? 76 : 16),
-        Text(isReset ? 'Reset Password' : 'Verifikasi Reverse OTP', textAlign: TextAlign.center, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: JpColors.navy)),
+        SizedBox(height: isReset ? 72 : 12),
+        Text(isReset ? 'Reset Password' : 'Konfirmasi Nomor WA', textAlign: TextAlign.center, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: JpColors.navy)),
         const SizedBox(height: 6),
-        Text('Kirim kode berikut via WhatsApp dari nomor ${_expectedPhone ?? ''}\nke 2S Member (bukan menunggu SMS):', textAlign: TextAlign.center, style: const TextStyle(color: JpColors.navyMuted, fontSize: 13)),
-        const SizedBox(height: 12),
-        Center(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            decoration: BoxDecoration(color: JpColors.navy, borderRadius: BorderRadius.circular(12)),
-            child: Text('Format Pesan: LOGIN $_otpCode', style: const TextStyle(color: JpColors.gold, fontWeight: FontWeight.w800, fontSize: 12)),
-          ),
+        Text(
+          'Kirim pesan konfirmasi berisi kode verifikasi di bawah melalui WhatsApp dari nomor ${_expectedPhone ?? ''} ke 2S Member:',
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: JpColors.navyMuted, fontSize: 13),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 14),
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: chars
@@ -488,14 +483,14 @@ class _AuthPageState extends State<AuthPage> {
                   ))
               .toList(),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
         Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.85), borderRadius: BorderRadius.circular(14), border: Border.all(color: JpColors.inputBorder)),
           child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
             const Icon(Icons.timer_outlined, color: JpColors.navy, size: 22),
             const SizedBox(width: 8),
-            Text('Menunggu WA: ${_formatClock(_otpSecondsLeft)}', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: JpColors.navy)),
+            Text('Menunggu konfirmasi WA: ${_formatClock(_otpSecondsLeft)}', style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w900, color: JpColors.navy)),
           ]),
         ),
         if (_mismatchWarning != null)
@@ -509,14 +504,14 @@ class _AuthPageState extends State<AuthPage> {
           onPressed: _resendCooldown > 0 ? null : () => isReset ? _startResetOtp() : _startRegisterOtp(),
           child: Text(_resendCooldown > 0 ? 'Buat Ulang Kode (${_resendCooldown}s)' : 'Buat Ulang Kode Baru', style: const TextStyle(fontWeight: FontWeight.w700)),
         ),
-        JpOrangeButton(label: 'Buka WhatsApp & Kirim Kode', icon: Icons.chat, onTap: _launchWa),
+        JpOrangeButton(label: 'Buka WhatsApp & Kirim', icon: Icons.chat, onTap: _launchWa),
         TextButton.icon(
           onPressed: () {
-            Clipboard.setData(ClipboardData(text: 'LOGIN $_otpCode'));
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Teks LOGIN disalin!')));
+            Clipboard.setData(ClipboardData(text: widget.ctrl.buildWaOtpMessage(code)));
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pesan konfirmasi disalin!')));
           },
           icon: const Icon(Icons.copy, size: 16),
-          label: const Text('Salin Teks LOGIN Manual'),
+          label: const Text('Salin Pesan Konfirmasi'),
         ),
         const SizedBox(height: 80),
       ],
@@ -531,7 +526,7 @@ class _AuthPageState extends State<AuthPage> {
           const Center(child: Icon(Icons.lock_reset, size: 60, color: Color(0xFF1E56A0))),
           const SizedBox(height: 12),
           const Text('Lupa Password?', textAlign: TextAlign.center, style: TextStyle(fontSize: 25, fontWeight: FontWeight.w900, color: JpColors.navy)),
-          const Text('Masukkan nomor WhatsApp terdaftar Anda untuk verifikasi Reverse OTP', textAlign: TextAlign.center, style: TextStyle(color: JpColors.navyMuted, fontSize: 13)),
+          const Text('Masukkan nomor WhatsApp terdaftar Anda untuk konfirmasi kepemilikan nomor', textAlign: TextAlign.center, style: TextStyle(color: JpColors.navyMuted, fontSize: 13)),
           const SizedBox(height: 20),
           _errBox(),
           JpInputField(controller: _forgotPhoneC, hint: 'No. HP WhatsApp (08...)', icon: Icons.phone_android, keyboardType: TextInputType.phone),
