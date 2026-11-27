@@ -10,23 +10,28 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app_config.dart';
 
 class MemberUser {
-  String id, name, phone, email, referralCode;
-  bool isEmailVerified, isWaVerified, freeSpinUsedToday;
+  String id, name, phone, email, photoUrl, referralCode, claimedMissionDate;
+  bool isEmailVerified, isWaVerified, emailMissionClaimed;
   int points, checkInStreak;
-  DateTime? lastCheckInDate;
+  DateTime? lastCheckInDate, lastSpinDate;
+  List<String> claimedDailyMissions;
 
   MemberUser({
     required this.id,
     required this.name,
     required this.phone,
     this.email = '',
+    this.photoUrl = '',
     this.isEmailVerified = false,
     this.isWaVerified = true,
+    this.emailMissionClaimed = false,
     this.points = 150,
     required this.referralCode,
     this.checkInStreak = 0,
     this.lastCheckInDate,
-    this.freeSpinUsedToday = false,
+    this.lastSpinDate,
+    this.claimedMissionDate = '',
+    this.claimedDailyMissions = const [],
   });
 
   String get tier {
@@ -38,7 +43,7 @@ class MemberUser {
 }
 
 class ServiceOrder {
-  final String id, invoiceNo, customerPhone, deviceName, complaint, replacedPart;
+  final String id, invoiceNo, customerPhone, deviceName, complaint, replacedPart, photoUrl;
   String status;
   final int totalCost, warrantyDays;
   final DateTime createdAt;
@@ -51,6 +56,7 @@ class ServiceOrder {
     required this.deviceName,
     required this.complaint,
     required this.replacedPart,
+    this.photoUrl = '',
     required this.status,
     required this.totalCost,
     required this.createdAt,
@@ -66,9 +72,8 @@ class ServiceOrder {
 }
 
 class StoreProduct {
-  final String id, name, category;
-  final int price, discountPercent;
-  final IconData icon;
+  final String id, name, category, photoUrl;
+  final int price, discountPercent, stock;
 
   StoreProduct({
     required this.id,
@@ -76,24 +81,45 @@ class StoreProduct {
     required this.category,
     required this.price,
     this.discountPercent = 0,
-    required this.icon,
+    this.stock = 10,
+    this.photoUrl = '',
   });
 
   int get finalPrice => (price * (100 - discountPercent) / 100).round();
 }
 
-class MissionItem {
-  final String id, title, description;
-  final int rewardPoints;
-  bool isCompleted, isClaimed;
+class VoucherItem {
+  final String id, code;
+  final int discountAmount, minSpend;
+  final bool isActive;
 
-  MissionItem({
+  VoucherItem({
     required this.id,
-    required this.title,
-    required this.description,
-    required this.rewardPoints,
-    this.isCompleted = false,
-    this.isClaimed = false,
+    required this.code,
+    required this.discountAmount,
+    required this.minSpend,
+    this.isActive = true,
+  });
+}
+
+class StoreOrder {
+  final String id, orderNo, customerPhone, customerName, productName, voucherCode, deliveryType;
+  String status;
+  final int finalTotal, pointsUsed;
+  final DateTime createdAt;
+
+  StoreOrder({
+    required this.id,
+    required this.orderNo,
+    required this.customerPhone,
+    required this.customerName,
+    required this.productName,
+    required this.finalTotal,
+    this.pointsUsed = 0,
+    this.voucherCode = '',
+    required this.deliveryType,
+    required this.status,
+    required this.createdAt,
   });
 }
 
@@ -134,32 +160,38 @@ class AppDataController extends ChangeNotifier {
   int extraStoreDiscount = 0;
 
   bool _googleReady = false;
+  bool _seededProducts = false;
   String? pendingGoogleEmail;
   String? pendingGoogleName;
+  String? pendingRegisterPhotoUrl;
   String? verifiedResetPhone;
 
   StreamSubscription<DocumentSnapshot>? _otpSub;
   StreamSubscription<QuerySnapshot>? _srvSub;
+  StreamSubscription<QuerySnapshot>? _prodSub;
+  StreamSubscription<QuerySnapshot>? _vouchSub;
+  StreamSubscription<QuerySnapshot>? _ordSub;
 
   List<ServiceOrder> services = [];
+  List<StoreProduct> products = [];
+  List<VoucherItem> vouchers = [];
+  List<StoreOrder> storeOrders = [];
   List<PointHistory> pointHistories = [];
   List<Map<String, dynamic>> leaderboard = [];
 
   bool get isGuest => currentUser == null;
   bool get canUseAdmin => !isGuest && AppConfig.adminWaNumbers.contains(currentUser!.phone);
 
-  final List<StoreProduct> products = [
-    StoreProduct(id: 'p1', name: 'Kabel Data Fast Charging 65W', category: 'Aksesoris', price: 65000, discountPercent: 20, icon: Icons.cable),
-    StoreProduct(id: 'p2', name: 'Tempered Glass Anti-Spy', category: 'Pelindung', price: 45000, discountPercent: 10, icon: Icons.security),
-    StoreProduct(id: 'p3', name: 'Charger Adapter GaN 33W', category: 'Charger', price: 150000, discountPercent: 15, icon: Icons.battery_charging_full),
-    StoreProduct(id: 'p4', name: 'TWS Earbuds 2S Bass', category: 'Audio', price: 199000, discountPercent: 25, icon: Icons.headphones),
-  ];
+  String get todayKey {
+    final n = DateTime.now();
+    return '${n.year}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
+  }
 
-  final List<MissionItem> missions = [
-    MissionItem(id: 'm1', title: 'Verifikasi Email', description: 'Verifikasi email asli di menu Profil', rewardPoints: 100),
-    MissionItem(id: 'm2', title: 'Check-In Pertama', description: 'Lakukan check-in harian hari ini', rewardPoints: 30),
-    MissionItem(id: 'm3', title: 'Ajak Teman Affiliate', description: 'Teman daftar pakai kode referral Anda', rewardPoints: 150),
-  ];
+  bool _isSameDay(DateTime? d) {
+    if (d == null) return false;
+    final n = DateTime.now();
+    return d.year == n.year && d.month == n.month && d.day == n.day;
+  }
 
   String normalizePhone(String p) {
     var d = p.replaceAll(RegExp(r'\D'), '');
@@ -184,6 +216,7 @@ class AppDataController extends ChangeNotifier {
 
   Future<void> initSession() async {
     try {
+      _listenStoreCatalog();
       await _loadLeaderboard();
       final prefs = await SharedPreferences.getInstance();
       final savedPhone = prefs.getString('2s_logged_phone');
@@ -198,12 +231,57 @@ class AppDataController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // LOGIN 1: EMAIL / NO. WA + PASSWORD (MENDUKUNG INGAT SAYA)
+  void _listenStoreCatalog() {
+    _prodSub?.cancel();
+    _prodSub = _db.collection('products').orderBy('name').snapshots().listen((snap) async {
+      if (snap.docs.isEmpty && !_seededProducts) {
+        _seededProducts = true;
+        final batch = _db.batch();
+        final starter = [
+          {'name': 'Kabel Data Fast Charging 65W', 'category': 'Aksesoris', 'price': 65000, 'discountPercent': 20, 'stock': 15, 'photoUrl': ''},
+          {'name': 'Tempered Glass Anti-Spy', 'category': 'Pelindung', 'price': 45000, 'discountPercent': 10, 'stock': 25, 'photoUrl': ''},
+          {'name': 'Charger Adapter GaN 33W', 'category': 'Charger', 'price': 150000, 'discountPercent': 15, 'stock': 8, 'photoUrl': ''},
+        ];
+        for (final p in starter) {
+          batch.set(_db.collection('products').doc(), p);
+        }
+        await batch.commit();
+        return;
+      }
+      products = snap.docs.map((doc) {
+        final d = doc.data();
+        return StoreProduct(
+          id: doc.id,
+          name: d['name'] ?? '-',
+          category: d['category'] ?? 'Umum',
+          price: (d['price'] ?? 0) as int,
+          discountPercent: (d['discountPercent'] ?? 0) as int,
+          stock: (d['stock'] ?? 0) as int,
+          photoUrl: d['photoUrl'] ?? '',
+        );
+      }).toList();
+      notifyListeners();
+    });
+
+    _vouchSub?.cancel();
+    _vouchSub = _db.collection('vouchers').snapshots().listen((snap) {
+      vouchers = snap.docs.map((doc) {
+        final d = doc.data();
+        return VoucherItem(
+          id: doc.id,
+          code: (d['code'] ?? '').toString().toUpperCase(),
+          discountAmount: (d['discountAmount'] ?? 0) as int,
+          minSpend: (d['minSpend'] ?? 0) as int,
+          isActive: d['isActive'] ?? true,
+        );
+      }).toList();
+      notifyListeners();
+    });
+  }
+
   Future<String?> loginWithPassword(String rawInput, String password, {bool rememberMe = true}) async {
     final input = rawInput.trim();
-    if (input.contains('@')) {
-      return loginWithGmail(input, password, rememberMe: rememberMe);
-    }
+    if (input.contains('@')) return loginWithGmail(input, password, rememberMe: rememberMe);
 
     final phone = normalizePhone(input);
     if (phone.length < 9) return 'Nomor WhatsApp / Email tidak valid.';
@@ -255,7 +333,6 @@ class AppDataController extends ChangeNotifier {
     }
   }
 
-  // LOGIN 2: TOMBOL RESMI GOOGLE
   Future<GoogleAuthResult> signInWithGoogleButton() async {
     if (AppConfig.googleWebClientId.contains('ISI_WEB_CLIENT_ID')) {
       return GoogleAuthResult(error: 'googleWebClientId di app_config.dart belum diisi!');
@@ -269,9 +346,7 @@ class AppDataController extends ChangeNotifier {
       if (account == null) return GoogleAuthResult(error: 'Login Google dibatalkan.');
 
       final idToken = account.authentication.idToken;
-      if (idToken == null) {
-        return GoogleAuthResult(error: 'Token Google kosong. Pastikan Web Client ID & SHA-1 di Firebase sudah benar.');
-      }
+      if (idToken == null) return GoogleAuthResult(error: 'Token Google kosong. Cek Web Client ID & SHA-1.');
 
       await FirebaseAuth.instance.signInWithCredential(GoogleAuthProvider.credential(idToken: idToken));
       final email = account.email.trim().toLowerCase();
@@ -289,18 +364,15 @@ class AppDataController extends ChangeNotifier {
       pendingGoogleName = account.displayName ?? '';
       return GoogleAuthResult(needsWaRegistration: true, email: email, name: pendingGoogleName);
     } on GoogleSignInException catch (e) {
-      if (e.code == GoogleSignInExceptionCode.canceled) {
-        return GoogleAuthResult(error: 'Login Google dibatalkan.');
-      }
-      return GoogleAuthResult(error: 'Google Sign-In gagal (${e.code.name}): ${e.description ?? "Periksa SHA-1 di Firebase"}');
+      if (e.code == GoogleSignInExceptionCode.canceled) return GoogleAuthResult(error: 'Login Google dibatalkan.');
+      return GoogleAuthResult(error: 'Google Sign-In gagal (${e.code.name}): ${e.description ?? "Cek SHA-1"}');
     } catch (e) {
       return GoogleAuthResult(error: 'Error Google Sign-In: $e');
     }
   }
 
-  // REVERSE OTP WA DENGAN VALIDASI KETAT NOMOR HP
   Future<OtpStartResult> startReverseOtp({
-    required String mode, // 'register' atau 'reset'
+    required String mode,
     required String rawPhone,
     String name = '',
     String password = '',
@@ -309,9 +381,7 @@ class AppDataController extends ChangeNotifier {
     required void Function(String? error) onCompleted,
   }) async {
     final expectedPhone = normalizePhone(rawPhone);
-    if (expectedPhone.length < 9) {
-      return OtpStartResult(error: 'Nomor WhatsApp wajib diisi dengan benar (contoh: 0812...).');
-    }
+    if (expectedPhone.length < 9) return OtpStartResult(error: 'Nomor WhatsApp wajib diisi dengan benar.');
 
     final existing = await _db.collection('users').doc(expectedPhone).get();
     if (mode == 'register' && existing.exists && (existing.data()?['passwordHash'] ?? '').toString().isNotEmpty) {
@@ -338,7 +408,6 @@ class AppDataController extends ChangeNotifier {
     _otpSub = sessionDoc.snapshots().listen((snap) async {
       final d = snap.data();
       if (d == null) return;
-
       if (d['status'] == 'pending' && d['mismatchSender'] != null) {
         final ts = d['mismatchAt'] as Timestamp?;
         if (ts != null && ts != lastMismatchTs) {
@@ -347,7 +416,6 @@ class AppDataController extends ChangeNotifier {
         }
         return;
       }
-
       if (d['status'] == 'verified') {
         final phone = normalizePhone(d['phone'] ?? '');
         if (phone != expectedPhone) {
@@ -407,15 +475,19 @@ class AppDataController extends ChangeNotifier {
       await userRef.set({
         'name': name,
         'phone': phone,
+        'photoUrl': pendingRegisterPhotoUrl ?? (doc.data()?['photoUrl'] ?? ''),
         'passwordHash': passHash,
         'isWaVerified': true,
         'email': hasGoogle ? pendingGoogleEmail : (doc.data()?['email'] ?? ''),
         'isEmailVerified': hasGoogle ? true : (doc.data()?['isEmailVerified'] ?? false),
+        'emailMissionClaimed': doc.data()?['emailMissionClaimed'] ?? false,
         'points': doc.exists ? (doc.data()?['points'] ?? startPts) : startPts,
         'referralCode': doc.data()?['referralCode'] ?? '2S-$suffix',
         'checkInStreak': doc.data()?['checkInStreak'] ?? 0,
         'lastCheckInDate': doc.data()?['lastCheckInDate'],
-        'freeSpinUsedToday': doc.data()?['freeSpinUsedToday'] ?? false,
+        'lastSpinDate': doc.data()?['lastSpinDate'],
+        'claimedMissionDate': doc.data()?['claimedMissionDate'] ?? '',
+        'claimedDailyMissions': doc.data()?['claimedDailyMissions'] ?? [],
         'createdAt': doc.data()?['createdAt'] ?? FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
@@ -428,6 +500,7 @@ class AppDataController extends ChangeNotifier {
       }
       pendingGoogleEmail = null;
       pendingGoogleName = null;
+      pendingRegisterPhotoUrl = null;
 
       final fresh = await userRef.get();
       final prefs = await SharedPreferences.getInstance();
@@ -435,7 +508,6 @@ class AppDataController extends ChangeNotifier {
       await _applyLoggedInUser(phone, fresh.data()!);
       return null;
     } else {
-      // Mode reset: simpan nomor terverifikasi, lalu lanjut ke layar "Buat Password Baru"
       if (!doc.exists) return 'Nomor WA $phone belum terdaftar.';
       verifiedResetPhone = phone;
       return null;
@@ -444,44 +516,51 @@ class AppDataController extends ChangeNotifier {
 
   Future<String?> saveNewPasswordAfterReset(String newPassword) async {
     final phone = verifiedResetPhone;
-    if (phone == null || phone.isEmpty) {
-      return 'Sesi verifikasi habis. Ulangi proses Lupa Password.';
-    }
+    if (phone == null || phone.isEmpty) return 'Sesi verifikasi habis. Ulangi Lupa Password.';
     final doc = await _db.collection('users').doc(phone).get();
     if (!doc.exists) return 'Akun tidak ditemukan.';
-
     final newHash = _hashPassword(phone, newPassword);
     final oldHash = (doc.data()?['passwordHash'] ?? '').toString();
-    if (oldHash.isNotEmpty && newHash == oldHash) {
-      return 'Password baru tidak boleh sama dengan password lama.';
-    }
-
-    await _db.collection('users').doc(phone).update({
-      'passwordHash': newHash,
-      'isWaVerified': true,
-    });
+    if (oldHash.isNotEmpty && newHash == oldHash) return 'Password baru tidak boleh sama dengan password lama.';
+    await _db.collection('users').doc(phone).update({'passwordHash': newHash, 'isWaVerified': true});
     verifiedResetPhone = null;
     return null;
   }
 
   Future<void> _applyLoggedInUser(String phone, Map<String, dynamic> d) async {
+    final savedDate = (d['claimedMissionDate'] ?? '').toString();
+    final List<String> dailyList = savedDate == todayKey
+        ? List<String>.from(d['claimedDailyMissions'] ?? [])
+        : <String>[];
+
     currentUser = MemberUser(
       id: phone,
       name: d['name'] ?? 'Member 2S',
       phone: phone,
       email: d['email'] ?? '',
+      photoUrl: d['photoUrl'] ?? '',
       isEmailVerified: d['isEmailVerified'] ?? false,
       isWaVerified: d['isWaVerified'] ?? true,
+      emailMissionClaimed: d['emailMissionClaimed'] ?? false,
       points: (d['points'] ?? 150) as int,
       referralCode: d['referralCode'] ?? '2S-$phone',
       checkInStreak: (d['checkInStreak'] ?? 0) as int,
       lastCheckInDate: (d['lastCheckInDate'] as Timestamp?)?.toDate(),
-      freeSpinUsedToday: d['freeSpinUsedToday'] ?? false,
+      lastSpinDate: (d['lastSpinDate'] as Timestamp?)?.toDate(),
+      claimedMissionDate: todayKey,
+      claimedDailyMissions: dailyList,
     );
-    missions[0].isCompleted = currentUser!.isEmailVerified;
     await _loadUserHistories();
     await _loadLeaderboard();
     _listenServices();
+    _listenStoreOrders();
+    notifyListeners();
+  }
+
+  Future<void> updateProfilePhoto(String url) async {
+    if (currentUser == null) return;
+    currentUser!.photoUrl = url;
+    await _db.collection('users').doc(currentUser!.id).update({'photoUrl': url});
     notifyListeners();
   }
 
@@ -493,9 +572,11 @@ class AppDataController extends ChangeNotifier {
       if (_googleReady) await GoogleSignIn.instance.signOut();
     } catch (_) {}
     await _srvSub?.cancel();
+    await _ordSub?.cancel();
     currentUser = null;
     isAdminMode = false;
     services = [];
+    storeOrders = [];
     pointHistories = [];
     notifyListeners();
   }
@@ -512,11 +593,35 @@ class AppDataController extends ChangeNotifier {
           deviceName: d['deviceName'] ?? '-',
           complaint: d['complaint'] ?? '-',
           replacedPart: d['replacedPart'] ?? '-',
+          photoUrl: d['photoUrl'] ?? '',
           status: d['status'] ?? 'Menunggu Cek',
           totalCost: (d['totalCost'] ?? 0) as int,
           createdAt: (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
           warrantyDays: (d['warrantyDays'] ?? 30) as int,
           warrantyClaimed: d['warrantyClaimed'] ?? false,
+        );
+      }).toList();
+      notifyListeners();
+    });
+  }
+
+  void _listenStoreOrders() {
+    _ordSub?.cancel();
+    _ordSub = _db.collection('store_orders').orderBy('createdAt', descending: true).limit(50).snapshots().listen((snap) {
+      storeOrders = snap.docs.map((doc) {
+        final d = doc.data();
+        return StoreOrder(
+          id: doc.id,
+          orderNo: d['orderNo'] ?? '-',
+          customerPhone: d['customerPhone'] ?? '',
+          customerName: d['customerName'] ?? '-',
+          productName: d['productName'] ?? '-',
+          finalTotal: (d['finalTotal'] ?? 0) as int,
+          pointsUsed: (d['pointsUsed'] ?? 0) as int,
+          voucherCode: d['voucherCode'] ?? '',
+          deliveryType: d['deliveryType'] ?? 'Ambil di Toko',
+          status: d['status'] ?? 'Menunggu',
+          createdAt: (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
         );
       }).toList();
       notifyListeners();
@@ -585,23 +690,53 @@ class AppDataController extends ChangeNotifier {
     if (currentUser == null || currentUser!.isEmailVerified) return;
     currentUser!.email = email.toLowerCase();
     currentUser!.isEmailVerified = true;
-    missions[0].isCompleted = true;
     await _db.collection('users').doc(currentUser!.id).update({'email': email.toLowerCase(), 'isEmailVerified': true});
     await addPoints(50, 'Bonus Verifikasi Email');
   }
 
-  bool canCheckInToday() {
-    final last = currentUser?.lastCheckInDate;
-    if (last == null) return true;
-    final now = DateTime.now();
-    return !(last.year == now.year && last.month == now.month && last.day == now.day);
+  // GAMIFIKASI HARIAN ANTI-CURANG (TERSIMPAN DI FIRESTORE)
+  bool canCheckInToday() => currentUser != null && !_isSameDay(currentUser!.lastCheckInDate);
+  bool canSpinFreeToday() => currentUser != null && !_isSameDay(currentUser!.lastSpinDate);
+
+  bool isMissionClaimed(String id) {
+    if (currentUser == null) return false;
+    if (id == 'm_email') return currentUser!.emailMissionClaimed;
+    if (currentUser!.claimedMissionDate != todayKey) return false;
+    return currentUser!.claimedDailyMissions.contains(id);
+  }
+
+  bool isMissionCompleted(String id) {
+    if (currentUser == null) return false;
+    if (id == 'm_email') return currentUser!.isEmailVerified;
+    if (id == 'm_checkin') return !canCheckInToday();
+    if (id == 'm_spin') return !canSpinFreeToday();
+    return false;
+  }
+
+  Future<void> claimMission(String id, int reward, String title) async {
+    if (currentUser == null || isMissionClaimed(id) || !isMissionCompleted(id)) return;
+    if (id == 'm_email') {
+      currentUser!.emailMissionClaimed = true;
+      await _db.collection('users').doc(currentUser!.id).update({'emailMissionClaimed': true});
+    } else {
+      if (currentUser!.claimedMissionDate != todayKey) {
+        currentUser!.claimedMissionDate = todayKey;
+        currentUser!.claimedDailyMissions = [id];
+      } else {
+        currentUser!.claimedDailyMissions = [...currentUser!.claimedDailyMissions, id];
+      }
+      await _db.collection('users').doc(currentUser!.id).update({
+        'claimedMissionDate': todayKey,
+        'claimedDailyMissions': currentUser!.claimedDailyMissions,
+      });
+    }
+    await addPoints(reward, 'Klaim Misi: $title');
   }
 
   Future<int> performDailyCheckIn() async {
     if (currentUser == null || !canCheckInToday()) return 0;
     currentUser!.checkInStreak = (currentUser!.checkInStreak % 7) + 1;
     currentUser!.lastCheckInDate = DateTime.now();
-    missions[1].isCompleted = true;
     final reward = 15 + (currentUser!.checkInStreak * 5);
     await _db.collection('users').doc(currentUser!.id).update({
       'checkInStreak': currentUser!.checkInStreak,
@@ -611,20 +746,16 @@ class AppDataController extends ChangeNotifier {
     return reward;
   }
 
-  Future<void> claimMission(MissionItem m) async {
-    if (!m.isCompleted || m.isClaimed) return;
-    m.isClaimed = true;
-    await addPoints(m.rewardPoints, 'Klaim Misi: ${m.title}');
-  }
-
   Future<String> spinWheelReward() async {
     if (currentUser == null) return '';
-    if (currentUser!.freeSpinUsedToday) {
+    if (!canSpinFreeToday()) {
       if (currentUser!.points < 20) return 'Poin tidak cukup (butuh 20 poin)';
       await addPoints(-20, 'Tiket Putar Mini Game');
     } else {
-      currentUser!.freeSpinUsedToday = true;
-      await _db.collection('users').doc(currentUser!.id).update({'freeSpinUsedToday': true});
+      currentUser!.lastSpinDate = DateTime.now();
+      await _db.collection('users').doc(currentUser!.id).update({
+        'lastSpinDate': Timestamp.fromDate(currentUser!.lastSpinDate!),
+      });
     }
     final rewards = [10, 25, 50, 100, 0];
     final win = rewards[Random().nextInt(rewards.length)];
@@ -652,14 +783,24 @@ class AppDataController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> addNewService(String custPhone, String device, String complaint, String part, int cost, int warranty) async {
-    final inv = '2S-INV-${100 + services.length + 1}';
+  // TRANSAKSI SERVIS + FOTO CLOUDINARY
+  Future<void> addNewService(
+    String custPhone,
+    String device,
+    String complaint,
+    String part,
+    int cost,
+    int warranty, {
+    String photoUrl = '',
+  }) async {
+    final inv = '2S-INV-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
     await _db.collection('services').add({
       'invoiceNo': inv,
       'customerPhone': normalizePhone(custPhone),
       'deviceName': device,
       'complaint': complaint,
       'replacedPart': part,
+      'photoUrl': photoUrl,
       'status': 'Menunggu Cek',
       'totalCost': cost,
       'warrantyDays': warranty,
@@ -684,25 +825,104 @@ class AppDataController extends ChangeNotifier {
     await _db.collection('services').doc(s.id).update({'warrantyClaimed': true});
   }
 
-  Future<String> checkoutProduct(StoreProduct p, bool usePoints) async {
-    if (currentUser == null) return 'Silakan login';
+  // STORE: KELOLA PRODUK, VOUCHER, & ORDER FIRESTORE
+  Future<void> addProduct({
+    required String name,
+    required String category,
+    required int price,
+    required int discountPercent,
+    required int stock,
+    String photoUrl = '',
+  }) async {
+    await _db.collection('products').add({
+      'name': name.trim(),
+      'category': category.trim().isEmpty ? 'Aksesoris' : category.trim(),
+      'price': price,
+      'discountPercent': discountPercent.clamp(0, 90),
+      'stock': stock,
+      'photoUrl': photoUrl,
+    });
+  }
+
+  Future<void> deleteProduct(String productId) async {
+    await _db.collection('products').doc(productId).delete();
+  }
+
+  Future<void> addVoucher({required String code, required int discountAmount, required int minSpend}) async {
+    await _db.collection('vouchers').add({
+      'code': code.trim().toUpperCase(),
+      'discountAmount': discountAmount,
+      'minSpend': minSpend,
+      'isActive': true,
+    });
+  }
+
+  VoucherItem? findValidVoucher(String rawCode, int subtotal) {
+    final c = rawCode.trim().toUpperCase();
+    if (c.isEmpty) return null;
+    for (final v in vouchers) {
+      if (v.isActive && v.code == c && subtotal >= v.minSpend) return v;
+    }
+    return null;
+  }
+
+  Future<String> checkoutProduct(
+    StoreProduct p, {
+    required bool usePoints,
+    String voucherCode = '',
+    String deliveryType = 'Ambil di Toko',
+  }) async {
+    if (currentUser == null) return 'Silakan login terlebih dahulu.';
+    if (p.stock <= 0) return 'Maaf, stok ${p.name} sedang habis.';
+
     int total = p.finalPrice - extraStoreDiscount;
+    final voucher = findValidVoucher(voucherCode, p.finalPrice);
+    if (voucherCode.trim().isNotEmpty && voucher == null) {
+      return 'Kode voucher tidak valid atau belum memenuhi minimal belanja.';
+    }
+    if (voucher != null) total -= voucher.discountAmount;
     if (total < 0) total = 0;
+
+    int usedPts = 0;
     if (usePoints && currentUser!.points > 0) {
       final maxCut = min(total, currentUser!.points * 100);
-      final usedPts = (maxCut / 100).floor();
+      usedPts = (maxCut / 100).floor();
       total -= usedPts * 100;
       if (usedPts > 0) await addPoints(-usedPts, 'Tukar Poin Beli ${p.name}');
     }
+
+    final ordNo = '2S-ORD-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
+    await _db.collection('store_orders').add({
+      'orderNo': ordNo,
+      'customerPhone': currentUser!.phone,
+      'customerName': currentUser!.name,
+      'productId': p.id,
+      'productName': p.name,
+      'finalTotal': total,
+      'pointsUsed': usedPts,
+      'voucherCode': voucher?.code ?? '',
+      'deliveryType': deliveryType,
+      'status': 'Menunggu',
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    await _db.collection('products').doc(p.id).update({'stock': FieldValue.increment(-1)});
+
     extraStoreDiscount = 0;
-    await addPoints(20, 'Cashback Poin Belanja Store');
-    return 'Order ${p.name} berhasil! Total bayar: ${formatRupiah(total)}';
+    await addPoints(20, 'Cashback Poin Order $ordNo');
+    return 'Pesanan $ordNo berhasil! Total bayar: ${formatRupiah(total)}';
+  }
+
+  Future<void> updateStoreOrderStatus(StoreOrder o, String newStatus) async {
+    await _db.collection('store_orders').doc(o.id).update({'status': newStatus});
   }
 
   @override
   void dispose() {
     _otpSub?.cancel();
     _srvSub?.cancel();
+    _prodSub?.cancel();
+    _vouchSub?.cancel();
+    _ordSub?.cancel();
     super.dispose();
   }
 }
