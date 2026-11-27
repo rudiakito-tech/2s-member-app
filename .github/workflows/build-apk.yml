@@ -49,25 +49,34 @@ jobs:
             sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/g' android/app/build.gradle
           fi
 
-      - name: Slice raw_sheet.png into transparent PNG assets
+      - name: Slice sheet image into transparent PNG assets
         run: |
           mkdir -p assets/images
-          if [ -f "assets/raw_sheet.png" ]; then
-            python3 -m pip install --quiet pillow
-            python3 - << 'EOF'
+          SHEET_FILE=$(find assets -maxdepth 1 -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.webp" \) | head -n 1)
+          if [ -z "$SHEET_FILE" ]; then
+            echo "ERROR: File gambar di folder assets/ tidak ditemukan!"
+            exit 1
+          fi
+          export SHEET_FILE
+          python3 -m pip install --quiet pillow
+          python3 - << 'EOF'
           from collections import deque
           from PIL import Image
           import os
 
-          sheet = Image.open("assets/raw_sheet.png").convert("RGBA")
+          sheet = Image.open(os.environ["SHEET_FILE"]).convert("RGBA")
           W, H = sheet.size
           spx = sheet.load()
+
+          def is_bg(rgba):
+              r, g, b, a = rgba
+              return a < 20 or (r >= 238 and g >= 238 and b >= 238)
 
           def find_split_x(x_frac, y1_frac, y2_frac, radius=25):
               cx = int(W * x_frac)
               best_x, best_score = cx, -1
               for x in range(max(0, cx - radius), min(W, cx + radius)):
-                  score = sum(1 for y in range(int(H*y1_frac), int(H*y2_frac)) if min(spx[x, y][:3]) >= 238)
+                  score = sum(1 for y in range(int(H*y1_frac), int(H*y2_frac)) if is_bg(spx[x, y]))
                   if score > best_score:
                       best_score, best_x = score, x
               return best_x
@@ -76,31 +85,31 @@ jobs:
               cy = int(H * y_frac)
               best_y, best_score = cy, -1
               for y in range(max(0, cy - radius), min(H, cy + radius)):
-                  score = sum(1 for x in range(int(W*x1_frac), int(W*x2_frac)) if min(spx[x, y][:3]) >= 238)
+                  score = sum(1 for x in range(int(W*x1_frac), int(W*x2_frac)) if is_bg(spx[x, y]))
                   if score > best_score:
                       best_score, best_y = score, y
               return best_y
 
-          def remove_outer_bg(im, thr=232):
+          def remove_outer_bg(im):
               w, h = im.size
               px = im.load()
               vis = [[False]*w for _ in range(h)]
               q = deque()
               for x in range(w):
                   for y in (0, h - 1):
-                      if min(px[x, y][:3]) >= thr:
+                      if is_bg(px[x, y]):
                           vis[y][x] = True
                           q.append((x, y))
               for y in range(h):
                   for x in (0, w - 1):
-                      if not vis[y][x] and min(px[x, y][:3]) >= thr:
+                      if not vis[y][x] and is_bg(px[x, y]):
                           vis[y][x] = True
                           q.append((x, y))
               while q:
                   cx, cy = q.popleft()
                   px[cx, cy] = (0, 0, 0, 0)
                   for nx, ny in ((cx+1, cy), (cx-1, cy), (cx, cy+1), (cx, cy-1)):
-                      if 0 <= nx < w and 0 <= ny < h and not vis[ny][nx] and min(px[nx, ny][:3]) >= thr:
+                      if 0 <= nx < w and 0 <= ny < h and not vis[ny][nx] and is_bg(px[nx, ny]):
                           vis[ny][nx] = True
                           q.append((nx, ny))
               box = im.getbbox()
@@ -143,13 +152,16 @@ jobs:
               if os.path.exists(os.path.dirname(p)):
                   sq.resize((sz, sz), Image.LANCZOS).save(p)
           EOF
-          fi
 
       - name: Install dependencies
         run: flutter pub get
 
       - name: Build Release APK
         run: flutter build apk --release
+
+      - name: Verify PNG assets bundled in APK
+        run: |
+          unzip -l build/app/outputs/flutter-apk/app-release.apk | grep "assets/images/" || (echo "ERROR: Gambar belum masuk ke APK! Periksa indentasi pubspec.yaml!" && exit 1)
 
       - name: Print APK SHA-1 Fingerprint
         run: |
