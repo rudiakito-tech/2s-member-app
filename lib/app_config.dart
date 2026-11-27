@@ -16,8 +16,8 @@ class AppConfig {
   // WAJIB ISI dari Firebase Console -> Authentication -> Google -> Web SDK configuration -> Web client ID
   static const String googleWebClientId = '514037486909-4k706d8cu25l6a3tg1cgl25oo3dl7p4j.apps.googleusercontent.com';
 
-  static const String cloudinaryCloudName = 'ISI_CLOUD_NAME_ANDA';
-  static const String cloudinaryUploadPreset = 'ISI_UPLOAD_PRESET_ANDA';
+  static const String cloudinaryCloudName = 'dlz7e6vnx';
+  static const String cloudinaryUploadPreset = 'member-service-upload';
 
   // BIARKAN kode Firebase Anda yang sudah terisi di sini:
   static const FirebaseOptions firebaseAndroidOptions = FirebaseOptions(
