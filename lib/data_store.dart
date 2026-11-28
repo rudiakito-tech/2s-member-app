@@ -43,11 +43,11 @@ class MemberUser {
 }
 
 class ServiceOrder {
-  final String id, invoiceNo, customerPhone, customerName, brand, deviceType, deviceName, complaint, replacedPart, photoUrl;
+  final String id, invoiceNo, customerPhone, customerName, brand, deviceType, deviceName, complaint, replacedPart, photoUrl, claimCode;
   String status;
   final int totalCost, warrantyDays;
   final DateTime createdAt;
-  bool warrantyClaimed;
+  bool warrantyClaimed, claimUsed;
 
   ServiceOrder({
     required this.id,
@@ -60,6 +60,8 @@ class ServiceOrder {
     required this.complaint,
     required this.replacedPart,
     this.photoUrl = '',
+    this.claimCode = '',
+    this.claimUsed = false,
     required this.status,
     required this.totalCost,
     required this.createdAt,
@@ -238,7 +240,6 @@ class AppDataController extends ChangeNotifier {
         'Kode Verifikasi: *$code*';
   }
 
-  // VALIDASI REALTIME STATUS NOMOR HP (Dipanggil setelah jeda ketik 500ms)
   Future<String> checkPhoneAccountStatus(String rawInput) async {
     final trimmed = rawInput.trim();
     if (trimmed.contains('@')) return 'email';
@@ -332,9 +333,7 @@ class AppDataController extends ChangeNotifier {
 
     final data = doc.data()!;
     final storedHash = (data['passwordHash'] ?? '').toString();
-    if (storedHash.isEmpty) {
-      return 'PASSWORD_NOT_SET';
-    }
+    if (storedHash.isEmpty) return 'PASSWORD_NOT_SET';
     if (storedHash != _hashPassword(phone, password)) return 'Password salah!';
 
     final prefs = await SharedPreferences.getInstance();
@@ -413,28 +412,63 @@ class AppDataController extends ChangeNotifier {
     }
   }
 
+  // REVERSE OTP WA: mode 'register', 'reset', atau 'claim' (Klaim Nota / Ubah Nomor)
   Future<OtpStartResult> startReverseOtp({
     required String mode,
     required String rawPhone,
     String name = '',
     String password = '',
     String refCode = '',
+    String claimInvoice = '',
+    String claimCode = '',
     required void Function(String wrongPhone) onMismatch,
     required void Function(String? error) onCompleted,
   }) async {
     final expectedPhone = normalizePhone(rawPhone);
     if (expectedPhone.length < 9) return OtpStartResult(error: 'Nomor WhatsApp wajib diisi dengan benar.');
 
-    final existing = await _db.collection('users').doc(expectedPhone).get();
-    if (mode == 'register' && existing.exists) {
-      final hasPass = (existing.data()?['passwordHash'] ?? '').toString().isNotEmpty;
-      if (hasPass) {
-        return OtpStartResult(error: 'Nomor WA $expectedPhone sudah terdaftar! Silakan langsung Login.');
+    String? claimServiceDocId;
+    String? claimOldPhone;
+
+    if (mode == 'claim') {
+      final inv = claimInvoice.trim().toUpperCase();
+      final cCode = claimCode.trim().toUpperCase();
+      if (inv.isEmpty || cCode.length < 6) {
+        return OtpStartResult(error: 'Masukkan No. Nota dan 6 digit Kode Klaim dengan benar.');
       }
-      return OtpStartResult(error: 'PASSWORD_NOT_SET');
-    }
-    if (mode == 'reset' && !existing.exists) {
-      return OtpStartResult(error: 'Nomor WA $expectedPhone belum terdaftar! Silakan Daftar Akun.');
+      final srvSnap = await _db.collection('services').where('invoiceNo', isEqualTo: inv).limit(1).get();
+      if (srvSnap.docs.isEmpty) {
+        return OtpStartResult(error: 'Nomor Nota $inv tidak ditemukan.');
+      }
+      final srvDoc = srvSnap.docs.first;
+      final sd = srvDoc.data();
+      if ((sd['claimCode'] ?? '').toString().toUpperCase() != cCode) {
+        return OtpStartResult(error: 'Kode Klaim tidak cocok untuk nota $inv.');
+      }
+      if (sd['claimUsed'] == true) {
+        return OtpStartResult(error: 'Kode Klaim nota $inv sudah pernah digunakan.');
+      }
+      final oldPhone = (sd['customerPhone'] ?? '').toString();
+      if (oldPhone.isNotEmpty && oldPhone != expectedPhone) {
+        final oldUserDoc = await _db.collection('users').doc(oldPhone).get();
+        if (oldUserDoc.exists && (oldUserDoc.data()?['passwordHash'] ?? '').toString().isNotEmpty) {
+          return OtpStartResult(error: 'Nota ini terhubung ke akun aktif ber-password. Hubungi Admin 2S Service untuk keamanan.');
+        }
+      }
+      claimServiceDocId = srvDoc.id;
+      claimOldPhone = oldPhone;
+    } else {
+      final existing = await _db.collection('users').doc(expectedPhone).get();
+      if (mode == 'register' && existing.exists) {
+        final hasPass = (existing.data()?['passwordHash'] ?? '').toString().isNotEmpty;
+        if (hasPass) {
+          return OtpStartResult(error: 'Nomor WA $expectedPhone sudah terdaftar! Silakan langsung Login.');
+        }
+        return OtpStartResult(error: 'PASSWORD_NOT_SET');
+      }
+      if (mode == 'reset' && !existing.exists) {
+        return OtpStartResult(error: 'Nomor WA $expectedPhone belum terdaftar! Silakan Daftar Akun.');
+      }
     }
 
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -476,6 +510,8 @@ class AppDataController extends ChangeNotifier {
           name: name.trim().isNotEmpty ? name.trim() : (waName.isNotEmpty ? waName : 'Member 2S'),
           password: password,
           refCode: refCode.trim().toUpperCase(),
+          claimServiceDocId: claimServiceDocId,
+          claimOldPhone: claimOldPhone,
         );
         onCompleted(err);
       }
@@ -492,9 +528,78 @@ class AppDataController extends ChangeNotifier {
     required String name,
     required String password,
     required String refCode,
+    String? claimServiceDocId,
+    String? claimOldPhone,
   }) async {
     final userRef = _db.collection('users').doc(phone);
     final doc = await userRef.get();
+
+    if (mode == 'claim') {
+      final passHash = _hashPassword(phone, password);
+      String finalName = name;
+      int bonusTransferPts = 150;
+
+      if (claimServiceDocId != null) {
+        final sDoc = await _db.collection('services').doc(claimServiceDocId).get();
+        final sName = (sDoc.data()?['customerName'] ?? '').toString();
+        if (sName.isNotEmpty && finalName == 'Member 2S') finalName = sName;
+        await _db.collection('services').doc(claimServiceDocId).update({
+          'customerPhone': phone,
+          'claimUsed': true,
+        });
+      }
+
+      if (claimOldPhone != null && claimOldPhone.isNotEmpty && claimOldPhone != phone) {
+        // Pindahkan semua nota lain yang memakai ID lama/TEMP ke nomor WA asli
+        final otherSrvs = await _db.collection('services').where('customerPhone', isEqualTo: claimOldPhone).get();
+        for (final os in otherSrvs.docs) {
+          await os.reference.update({'customerPhone': phone});
+        }
+        final oldDoc = await _db.collection('users').doc(claimOldPhone).get();
+        if (oldDoc.exists) {
+          bonusTransferPts = (oldDoc.data()?['points'] ?? 150) as int;
+          await oldDoc.reference.update({'mergedTo': phone, 'points': 0});
+        }
+      }
+
+      final suffix = phone.length >= 4 ? phone.substring(phone.length - 4) : phone;
+      if (!doc.exists) {
+        await userRef.set({
+          'name': finalName,
+          'phone': phone,
+          'photoUrl': '',
+          'passwordHash': passHash,
+          'isWaVerified': true,
+          'email': '',
+          'isEmailVerified': false,
+          'emailMissionClaimed': false,
+          'points': bonusTransferPts,
+          'referralCode': '2S-$suffix',
+          'checkInStreak': 0,
+          'lastCheckInDate': null,
+          'lastSpinDate': null,
+          'claimedMissionDate': '',
+          'claimedDailyMissions': [],
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+        await userRef.collection('point_histories').add({
+          'title': 'Klaim Nota & Aktivasi Akun 2S',
+          'amount': bonusTransferPts,
+          'date': FieldValue.serverTimestamp(),
+        });
+      } else {
+        await userRef.update({
+          'passwordHash': passHash,
+          'isWaVerified': true,
+        });
+      }
+
+      final fresh = await userRef.get();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('2s_logged_phone', phone);
+      await _applyLoggedInUser(phone, fresh.data()!);
+      return null;
+    }
 
     if (mode == 'register') {
       final passHash = _hashPassword(phone, password);
@@ -615,8 +720,9 @@ class AppDataController extends ChangeNotifier {
     if (clean.startsWith('2SMEMBER|')) {
       clean = clean.replaceFirst('2SMEMBER|', '');
     }
-    final phone = normalizePhone(clean);
-    if (phone.length < 9) return null;
+    final isTemp = clean.toUpperCase().startsWith('TEMP-');
+    final phone = isTemp ? clean.toUpperCase() : normalizePhone(clean);
+    if (!isTemp && phone.length < 9) return null;
     final doc = await _db.collection('users').doc(phone).get();
     if (!doc.exists) return null;
     final d = doc.data()!;
@@ -666,6 +772,8 @@ class AppDataController extends ChangeNotifier {
           complaint: d['complaint'] ?? '-',
           replacedPart: d['replacedPart'] ?? '-',
           photoUrl: d['photoUrl'] ?? '',
+          claimCode: d['claimCode'] ?? '',
+          claimUsed: d['claimUsed'] ?? false,
           status: d['status'] ?? 'Menunggu Cek',
           totalCost: (d['totalCost'] ?? 0) as int,
           createdAt: (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
@@ -854,6 +962,7 @@ class AppDataController extends ChangeNotifier {
     notifyListeners();
   }
 
+  // PEMBUATAN NOTA + AUTO-DAFTAR (TERMASUK AKUN TEMP) + KODE KLAIM 6 DIGIT
   Future<ServiceOrder> addNewService({
     required String custPhone,
     required String custName,
@@ -865,10 +974,12 @@ class AppDataController extends ChangeNotifier {
     required int warrantyDays,
     String photoUrl = '',
   }) async {
-    final phone = normalizePhone(custPhone);
+    final trimmed = custPhone.trim().toUpperCase();
+    final isTemp = trimmed.startsWith('TEMP-');
+    final phone = isTemp ? trimmed : normalizePhone(custPhone);
     final finalName = custName.trim().isEmpty ? 'Member 2S' : custName.trim();
 
-    if (phone.length >= 9) {
+    if (isTemp || phone.length >= 9) {
       final userRef = _db.collection('users').doc(phone);
       final userDoc = await userRef.get();
       if (!userDoc.exists) {
@@ -878,6 +989,7 @@ class AppDataController extends ChangeNotifier {
           'phone': phone,
           'photoUrl': '',
           'passwordHash': '',
+          'isTempAccount': isTemp,
           'isWaVerified': false,
           'email': '',
           'isEmailVerified': false,
@@ -900,6 +1012,10 @@ class AppDataController extends ChangeNotifier {
       }
     }
 
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    final rnd = Random();
+    final claimCode = List.generate(6, (_) => chars[rnd.nextInt(chars.length)]).join();
+
     final now = DateTime.now();
     final inv = '2S-INV-${now.millisecondsSinceEpoch.toString().substring(7)}';
     final fullDevice = '$brand $deviceType'.trim();
@@ -913,6 +1029,8 @@ class AppDataController extends ChangeNotifier {
       'complaint': complaint.trim(),
       'replacedPart': repairAction.trim(),
       'photoUrl': photoUrl,
+      'claimCode': claimCode,
+      'claimUsed': false,
       'status': 'Menunggu Cek',
       'totalCost': cost,
       'warrantyDays': warrantyDays,
@@ -931,11 +1049,43 @@ class AppDataController extends ChangeNotifier {
       complaint: complaint.trim(),
       replacedPart: repairAction.trim(),
       photoUrl: photoUrl,
+      claimCode: claimCode,
+      claimUsed: false,
       status: 'Menunggu Cek',
       totalCost: cost,
       createdAt: now,
       warrantyDays: warrantyDays,
     );
+  }
+
+  // KASIR EDIT NO. HP LANGSUNG DI NOTA (JIKA SALAH KETIK DI TOKO)
+  Future<String?> updateServiceCustomerPhone(ServiceOrder s, String newRawPhone) async {
+    final newPhone = normalizePhone(newRawPhone);
+    if (newPhone.length < 9) return 'Nomor WA baru tidak valid.';
+
+    final userRef = _db.collection('users').doc(newPhone);
+    final userDoc = await userRef.get();
+    if (!userDoc.exists) {
+      final suffix = newPhone.length >= 4 ? newPhone.substring(newPhone.length - 4) : newPhone;
+      await userRef.set({
+        'name': s.customerName.isEmpty ? 'Member 2S' : s.customerName,
+        'phone': newPhone,
+        'photoUrl': '',
+        'passwordHash': '',
+        'isWaVerified': false,
+        'email': '',
+        'isEmailVerified': false,
+        'emailMissionClaimed': false,
+        'points': 150,
+        'referralCode': '2S-$suffix',
+        'checkInStreak': 0,
+        'createdByCashier': true,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    await _db.collection('services').doc(s.id).update({'customerPhone': newPhone});
+    return null;
   }
 
   Future<void> updateServiceStatus(ServiceOrder s, String newStatus) async {
