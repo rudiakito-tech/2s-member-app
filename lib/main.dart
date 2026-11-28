@@ -156,8 +156,10 @@ void promptLoginDialog(BuildContext context, AppDataController ctrl, String acti
 }
 
 Future<void> sendNotaToWhatsapp(AppDataController ctrl, ServiceOrder s) async {
+  if (s.customerPhone.startsWith('TEMP-')) return;
   final phone = ctrl.normalizePhone(s.customerPhone);
   if (phone.length < 9) return;
+  final claimLine = (!s.claimUsed && s.claimCode.isNotEmpty) ? '\nKode Klaim: ${s.claimCode}' : '';
   final text = '*e-Nota 2S Service Handphone*\n'
       'No. Nota : ${s.invoiceNo}\n'
       'Tgl/Jam  : ${ctrl.formatDateTime(s.createdAt)}\n'
@@ -167,7 +169,7 @@ Future<void> sendNotaToWhatsapp(AppDataController ctrl, ServiceOrder s) async {
       'Perbaikan: ${s.replacedPart}\n'
       'Status   : ${s.status}\n'
       'Garansi  : ${s.warrantyDays} Hari\n'
-      'Harga    : ${ctrl.formatRupiah(s.totalCost)}\n\n'
+      'Harga    : ${ctrl.formatRupiah(s.totalCost)}$claimLine\n\n'
       'Terima kasih telah servis di 2S Service Handphone!';
   final url = Uri.parse('https://wa.me/$phone?text=${Uri.encodeComponent(text)}');
   await launchUrl(url, mode: LaunchMode.externalApplication);
@@ -223,11 +225,7 @@ class _MainShellState extends State<MainShell> {
             )
           else if (widget.ctrl.canUseAdmin) ...[
             if (widget.ctrl.isAdminMode)
-              IconButton(
-                tooltip: 'Scan QR Buat Nota',
-                onPressed: _scanAndOpenNota,
-                icon: const Icon(Icons.qr_code_scanner, color: JpColors.orange),
-              ),
+              IconButton(tooltip: 'Scan QR Buat Nota', onPressed: _scanAndOpenNota, icon: const Icon(Icons.qr_code_scanner, color: JpColors.orange)),
             Row(
               children: [
                 const Text('Kasir', style: TextStyle(fontSize: 12)),
@@ -239,11 +237,7 @@ class _MainShellState extends State<MainShell> {
       ),
       body: pages[_tab],
       floatingActionButton: widget.ctrl.isAdminMode && widget.ctrl.canUseAdmin && _tab == 0
-          ? FloatingActionButton.extended(
-              onPressed: () => _openCreateNota(),
-              icon: const Icon(Icons.receipt_long),
-              label: const Text('Buat Nota'),
-            )
+          ? FloatingActionButton.extended(onPressed: () => _openCreateNota(), icon: const Icon(Icons.receipt_long), label: const Text('Buat Nota'))
           : null,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tab,
@@ -263,6 +257,37 @@ class _MainShellState extends State<MainShell> {
 class HomeServiceTab extends StatelessWidget {
   final AppDataController ctrl;
   const HomeServiceTab({super.key, required this.ctrl});
+
+  void _showEditPhoneDialog(BuildContext context, ServiceOrder s) {
+    final phoneC = TextEditingController(text: s.customerPhone.startsWith('TEMP-') ? '' : s.customerPhone);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Edit No. HP (${s.invoiceNo})'),
+        content: TextField(
+          controller: phoneC,
+          keyboardType: TextInputType.phone,
+          decoration: const InputDecoration(labelText: 'Nomor WA Pelanggan yang Benar', hintText: '0812...', border: OutlineInputBorder()),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+          FilledButton(
+            onPressed: () async {
+              final err = await ctrl.updateServiceCustomerPhone(s, phoneC.text);
+              if (!ctx.mounted) return;
+              Navigator.pop(ctx);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(err ?? 'Nomor HP nota berhasil diperbarui!')),
+                );
+              }
+            },
+            child: const Text('Simpan'),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -368,6 +393,11 @@ class HomeServiceTab extends StatelessWidget {
                   children: [
                     Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(s.invoiceNo, style: const TextStyle(fontWeight: FontWeight.bold)), Chip(label: Text(s.status))]),
                     Text('${ctrl.formatDateTime(s.createdAt)}${s.customerName.isNotEmpty ? " • ${s.customerName}" : ""}', style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                    if (ctrl.isAdminMode)
+                      Text(
+                        'HP: ${s.customerPhone}${(!s.claimUsed && s.claimCode.isNotEmpty) ? " • Kode Klaim: ${s.claimCode}" : ""}',
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF1E56A0)),
+                      ),
                     if (s.photoUrl.isNotEmpty) ...[
                       const SizedBox(height: 6),
                       ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(s.photoUrl, height: 120, width: double.infinity, fit: BoxFit.cover)),
@@ -385,10 +415,13 @@ class HomeServiceTab extends StatelessWidget {
                     const SizedBox(height: 8),
                     Wrap(
                       spacing: 8,
+                      runSpacing: 4,
                       children: [
                         OutlinedButton.icon(onPressed: () => _showNotaDialog(context, s), icon: const Icon(Icons.receipt_long, size: 18), label: const Text('e-Nota')),
-                        if (ctrl.isAdminMode)
+                        if (ctrl.isAdminMode && !s.customerPhone.startsWith('TEMP-'))
                           OutlinedButton.icon(onPressed: () => sendNotaToWhatsapp(ctrl, s), icon: const Icon(Icons.chat, size: 18, color: Colors.green), label: const Text('Kirim WA')),
+                        if (ctrl.isAdminMode)
+                          OutlinedButton.icon(onPressed: () => _showEditPhoneDialog(context, s), icon: const Icon(Icons.edit, size: 17), label: const Text('Edit No. HP')),
                         if ((s.status == 'Selesai' || s.status == 'Diambil') && s.remainingWarrantyDays > 0 && !s.warrantyClaimed)
                           OutlinedButton.icon(onPressed: () => ctrl.claimWarranty(s), icon: const Icon(Icons.verified_user, size: 18), label: const Text('Klaim Garansi')),
                         if (s.warrantyClaimed) const Chip(label: Text('Garansi Diajukan')),
@@ -424,21 +457,22 @@ class HomeServiceTab extends StatelessWidget {
                 ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(s.photoUrl, height: 140, width: double.infinity, fit: BoxFit.cover)),
                 const SizedBox(height: 10),
               ],
-              Text('No. Nota : ${s.invoiceNo}'),
-              Text('Tgl/Jam  : ${ctrl.formatDateTime(s.createdAt)}'),
-              Text('Pelanggan: ${s.customerName.isEmpty ? "-" : s.customerName}'),
-              Text('No. WA   : ${s.customerPhone}'),
-              Text('Unit HP  : ${s.fullDeviceName}'),
-              Text('Kerusakan: ${s.complaint}'),
-              Text('Perbaikan: ${s.replacedPart}'),
-              Text('Garansi  : ${s.warrantyDays} Hari'),
+              Text('No. Nota  : ${s.invoiceNo}'),
+              Text('Tgl/Jam   : ${ctrl.formatDateTime(s.createdAt)}'),
+              Text('Pelanggan : ${s.customerName.isEmpty ? "-" : s.customerName}'),
+              Text('No. WA    : ${s.customerPhone}'),
+              if (!s.claimUsed && s.claimCode.isNotEmpty) Text('Kode Klaim: ${s.claimCode}', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E56A0))),
+              Text('Unit HP   : ${s.fullDeviceName}'),
+              Text('Kerusakan : ${s.complaint}'),
+              Text('Perbaikan : ${s.replacedPart}'),
+              Text('Garansi   : ${s.warrantyDays} Hari'),
               const Divider(),
-              Text('Total    : ${ctrl.formatRupiah(s.totalCost)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              Text('Total     : ${ctrl.formatRupiah(s.totalCost)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             ],
           ),
         ),
         actions: [
-          if (ctrl.isAdminMode)
+          if (ctrl.isAdminMode && !s.customerPhone.startsWith('TEMP-'))
             TextButton.icon(onPressed: () => sendNotaToWhatsapp(ctrl, s), icon: const Icon(Icons.chat, color: Colors.green), label: const Text('Kirim WA')),
           FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Tutup')),
         ],
