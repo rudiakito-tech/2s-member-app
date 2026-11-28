@@ -43,7 +43,7 @@ class MemberUser {
 }
 
 class ServiceOrder {
-  final String id, invoiceNo, customerPhone, deviceName, complaint, replacedPart, photoUrl;
+  final String id, invoiceNo, customerPhone, customerName, brand, deviceType, deviceName, complaint, replacedPart, photoUrl;
   String status;
   final int totalCost, warrantyDays;
   final DateTime createdAt;
@@ -53,6 +53,9 @@ class ServiceOrder {
     required this.id,
     required this.invoiceNo,
     required this.customerPhone,
+    this.customerName = '',
+    this.brand = '',
+    this.deviceType = '',
     required this.deviceName,
     required this.complaint,
     required this.replacedPart,
@@ -63,6 +66,11 @@ class ServiceOrder {
     this.warrantyDays = 30,
     this.warrantyClaimed = false,
   });
+
+  String get fullDeviceName {
+    final combined = '$brand $deviceType'.trim();
+    return combined.isNotEmpty ? combined : deviceName;
+  }
 
   DateTime get warrantyExpiredAt => createdAt.add(Duration(days: warrantyDays));
   int get remainingWarrantyDays {
@@ -214,6 +222,15 @@ class AppDataController extends ChangeNotifier {
     return 'Rp $buf';
   }
 
+  String formatDateTime(DateTime dt) {
+    final d = dt.day.toString().padLeft(2, '0');
+    final m = dt.month.toString().padLeft(2, '0');
+    final y = dt.year.toString();
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    return '$d/$m/$y • $hh:$mm';
+  }
+
   String buildWaOtpMessage(String code) {
     return '*Konfirmasi Akun 2S Member*\n\n'
         'Pesan ini digunakan untuk mengonfirmasi kepemilikan nomor WhatsApp akun Anda. '
@@ -299,7 +316,9 @@ class AppDataController extends ChangeNotifier {
 
     final data = doc.data()!;
     final storedHash = (data['passwordHash'] ?? '').toString();
-    if (storedHash.isEmpty) return 'Akun belum punya password. Gunakan Lupa Password.';
+    if (storedHash.isEmpty) {
+      return 'PASSWORD_NOT_SET';
+    }
     if (storedHash != _hashPassword(phone, password)) return 'Password salah!';
 
     final prefs = await SharedPreferences.getInstance();
@@ -391,8 +410,14 @@ class AppDataController extends ChangeNotifier {
     if (expectedPhone.length < 9) return OtpStartResult(error: 'Nomor WhatsApp wajib diisi dengan benar.');
 
     final existing = await _db.collection('users').doc(expectedPhone).get();
-    if (mode == 'register' && existing.exists && (existing.data()?['passwordHash'] ?? '').toString().isNotEmpty) {
-      return OtpStartResult(error: 'Nomor WA $expectedPhone sudah terdaftar! Silakan langsung Login.');
+    if (mode == 'register' && existing.exists) {
+      final hasPass = (existing.data()?['passwordHash'] ?? '').toString().isNotEmpty;
+      if (hasPass) {
+        return OtpStartResult(error: 'Nomor WA $expectedPhone sudah terdaftar! Silakan langsung Login.');
+      }
+      return OtpStartResult(
+        error: 'Nomor WA $expectedPhone sudah terdaftar otomatis dari Nota Kasir! Silakan gunakan menu Lupa Password untuk membuat password via Reverse OTP.',
+      );
     }
     if (mode == 'reset' && !existing.exists) {
       return OtpStartResult(error: 'Nomor WA $expectedPhone belum terdaftar! Silakan Daftar Akun.');
@@ -571,7 +596,6 @@ class AppDataController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // CARI DATA MEMBER DARI SCAN QR KASIR
   Future<MemberUser?> lookupMemberByPhone(String rawInput) async {
     var clean = rawInput.trim();
     if (clean.startsWith('2SMEMBER|')) {
@@ -621,6 +645,9 @@ class AppDataController extends ChangeNotifier {
           id: doc.id,
           invoiceNo: d['invoiceNo'] ?? '-',
           customerPhone: d['customerPhone'] ?? '',
+          customerName: d['customerName'] ?? '',
+          brand: d['brand'] ?? '',
+          deviceType: d['deviceType'] ?? '',
           deviceName: d['deviceName'] ?? '-',
           complaint: d['complaint'] ?? '-',
           replacedPart: d['replacedPart'] ?? '-',
@@ -813,29 +840,90 @@ class AppDataController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> addNewService(
-    String custPhone,
-    String device,
-    String complaint,
-    String part,
-    int cost,
-    int warranty, {
+  // PEMBUATAN NOTA + AUTO-DAFTAR PELANGGAN BARU (TANPA PASSWORD -> ATUR LEWAT RESET OTP)
+  Future<ServiceOrder> addNewService({
+    required String custPhone,
+    required String custName,
+    required String brand,
+    required String deviceType,
+    required String complaint,
+    required String repairAction,
+    required int cost,
+    required int warrantyDays,
     String photoUrl = '',
   }) async {
-    final inv = '2S-INV-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}';
-    await _db.collection('services').add({
+    final phone = normalizePhone(custPhone);
+    final finalName = custName.trim().isEmpty ? 'Member 2S' : custName.trim();
+
+    // Jika pelanggan baru belum ada di Firestore -> daftarkan otomatis dengan data default
+    if (phone.length >= 9) {
+      final userRef = _db.collection('users').doc(phone);
+      final userDoc = await userRef.get();
+      if (!userDoc.exists) {
+        final suffix = phone.length >= 4 ? phone.substring(phone.length - 4) : phone;
+        await userRef.set({
+          'name': finalName,
+          'phone': phone,
+          'photoUrl': '',
+          'passwordHash': '', // Kosong -> diarahkan ke Reset Password (Reverse OTP)
+          'isWaVerified': false,
+          'email': '',
+          'isEmailVerified': false,
+          'emailMissionClaimed': false,
+          'points': 150,
+          'referralCode': '2S-$suffix',
+          'checkInStreak': 0,
+          'lastCheckInDate': null,
+          'lastSpinDate': null,
+          'claimedMissionDate': '',
+          'claimedDailyMissions': [],
+          'createdByCashier': true,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+        await userRef.collection('point_histories').add({
+          'title': 'Bonus Member Baru (Terdaftar via Nota)',
+          'amount': 150,
+          'date': FieldValue.serverTimestamp(),
+        });
+      }
+    }
+
+    final now = DateTime.now();
+    final inv = '2S-INV-${now.millisecondsSinceEpoch.toString().substring(7)}';
+    final fullDevice = '$brand $deviceType'.trim();
+    final docRef = await _db.collection('services').add({
       'invoiceNo': inv,
-      'customerPhone': normalizePhone(custPhone),
-      'deviceName': device,
-      'complaint': complaint,
-      'replacedPart': part,
+      'customerPhone': phone,
+      'customerName': finalName,
+      'brand': brand.trim(),
+      'deviceType': deviceType.trim(),
+      'deviceName': fullDevice.isEmpty ? 'Handphone' : fullDevice,
+      'complaint': complaint.trim(),
+      'replacedPart': repairAction.trim(),
       'photoUrl': photoUrl,
       'status': 'Menunggu Cek',
       'totalCost': cost,
-      'warrantyDays': warranty,
+      'warrantyDays': warrantyDays,
       'warrantyClaimed': false,
-      'createdAt': FieldValue.serverTimestamp(),
+      'createdAt': Timestamp.fromDate(now),
     });
+
+    return ServiceOrder(
+      id: docRef.id,
+      invoiceNo: inv,
+      customerPhone: phone,
+      customerName: finalName,
+      brand: brand.trim(),
+      deviceType: deviceType.trim(),
+      deviceName: fullDevice.isEmpty ? 'Handphone' : fullDevice,
+      complaint: complaint.trim(),
+      replacedPart: repairAction.trim(),
+      photoUrl: photoUrl,
+      status: 'Menunggu Cek',
+      totalCost: cost,
+      createdAt: now,
+      warrantyDays: warrantyDays,
+    );
   }
 
   Future<void> updateServiceStatus(ServiceOrder s, String newStatus) async {
