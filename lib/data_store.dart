@@ -238,6 +238,22 @@ class AppDataController extends ChangeNotifier {
         'Kode Verifikasi: *$code*';
   }
 
+  // VALIDASI REALTIME STATUS NOMOR HP (Dipanggil setelah jeda ketik 500ms)
+  Future<String> checkPhoneAccountStatus(String rawInput) async {
+    final trimmed = rawInput.trim();
+    if (trimmed.contains('@')) return 'email';
+    final phone = normalizePhone(trimmed);
+    if (phone.length < 10) return 'incomplete';
+    try {
+      final doc = await _db.collection('users').doc(phone).get();
+      if (!doc.exists) return 'not_found';
+      final hasPass = (doc.data()?['passwordHash'] ?? '').toString().isNotEmpty;
+      return hasPass ? 'has_password' : 'no_password';
+    } catch (_) {
+      return 'error';
+    }
+  }
+
   Future<void> initSession() async {
     try {
       _listenStoreCatalog();
@@ -415,9 +431,7 @@ class AppDataController extends ChangeNotifier {
       if (hasPass) {
         return OtpStartResult(error: 'Nomor WA $expectedPhone sudah terdaftar! Silakan langsung Login.');
       }
-      return OtpStartResult(
-        error: 'Nomor WA $expectedPhone sudah terdaftar otomatis dari Nota Kasir! Silakan gunakan menu Lupa Password untuk membuat password via Reverse OTP.',
-      );
+      return OtpStartResult(error: 'PASSWORD_NOT_SET');
     }
     if (mode == 'reset' && !existing.exists) {
       return OtpStartResult(error: 'Nomor WA $expectedPhone belum terdaftar! Silakan Daftar Akun.');
@@ -840,7 +854,6 @@ class AppDataController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // PEMBUATAN NOTA + AUTO-DAFTAR PELANGGAN BARU (TANPA PASSWORD -> ATUR LEWAT RESET OTP)
   Future<ServiceOrder> addNewService({
     required String custPhone,
     required String custName,
@@ -855,7 +868,6 @@ class AppDataController extends ChangeNotifier {
     final phone = normalizePhone(custPhone);
     final finalName = custName.trim().isEmpty ? 'Member 2S' : custName.trim();
 
-    // Jika pelanggan baru belum ada di Firestore -> daftarkan otomatis dengan data default
     if (phone.length >= 9) {
       final userRef = _db.collection('users').doc(phone);
       final userDoc = await userRef.get();
@@ -865,7 +877,7 @@ class AppDataController extends ChangeNotifier {
           'name': finalName,
           'phone': phone,
           'photoUrl': '',
-          'passwordHash': '', // Kosong -> diarahkan ke Reset Password (Reverse OTP)
+          'passwordHash': '',
           'isWaVerified': false,
           'email': '',
           'isEmailVerified': false,
