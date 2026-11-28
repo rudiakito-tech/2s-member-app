@@ -43,11 +43,12 @@ class MemberUser {
 }
 
 class ServiceOrder {
-  final String id, invoiceNo, customerPhone, customerName, brand, deviceType, deviceName, complaint, replacedPart, photoUrl, claimCode;
+  final String id, invoiceNo, customerPhone, customerName, brand, deviceType, deviceName, complaint, replacedPart;
+  final String beforePhotoUrl, afterPhotoUrl, claimCode, paymentStatus, sparepartSource, sparepartNote, techNote;
   String status;
-  final int totalCost, warrantyDays;
+  final int totalCost, paidAmount, sparepartCost, warrantyDays;
   final DateTime createdAt;
-  bool warrantyClaimed, claimUsed;
+  bool warrantyClaimed, claimUsed, pointsAwarded;
 
   ServiceOrder({
     required this.id,
@@ -59,19 +60,33 @@ class ServiceOrder {
     required this.deviceName,
     required this.complaint,
     required this.replacedPart,
-    this.photoUrl = '',
+    this.beforePhotoUrl = '',
+    this.afterPhotoUrl = '',
     this.claimCode = '',
     this.claimUsed = false,
+    this.paymentStatus = 'Belum Bayar',
+    this.paidAmount = 0,
+    this.sparepartCost = 0,
+    this.sparepartSource = 'Kas Toko',
+    this.sparepartNote = '',
+    this.techNote = '',
     required this.status,
     required this.totalCost,
     required this.createdAt,
     this.warrantyDays = 30,
     this.warrantyClaimed = false,
+    this.pointsAwarded = false,
   });
 
   String get fullDeviceName {
     final combined = '$brand $deviceType'.trim();
     return combined.isNotEmpty ? combined : deviceName;
+  }
+
+  int get remainingPayment {
+    if (paymentStatus == 'Lunas') return 0;
+    final diff = totalCost - paidAmount;
+    return diff < 0 ? 0 : diff;
   }
 
   DateTime get warrantyExpiredAt => createdAt.add(Duration(days: warrantyDays));
@@ -163,6 +178,8 @@ class GoogleAuthResult {
 }
 
 class AppDataController extends ChangeNotifier {
+  static const List<String> serviceStages = ['Diterima', 'Dicek', 'Diperbaiki', 'Selesai', 'Diambil'];
+
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   MemberUser? currentUser;
   bool isInitialized = false;
@@ -192,6 +209,18 @@ class AppDataController extends ChangeNotifier {
   bool get isGuest => currentUser == null;
   bool get canUseAdmin => !isGuest && AppConfig.adminWaNumbers.contains(currentUser!.phone);
 
+  int get totalCashInFromCustomers => services.fold(0, (sum, s) => sum + (s.paymentStatus == 'Lunas' ? s.totalCost : s.paidAmount));
+  int get totalSparepartFromCash => services.where((s) => s.sparepartSource == 'Kas Toko').fold(0, (sum, s) => sum + s.sparepartCost);
+  int get totalSparepartFromOwner => services.where((s) => s.sparepartSource == 'TF dari Owner').fold(0, (sum, s) => sum + s.sparepartCost);
+  int get netStoreCash => totalCashInFromCustomers - totalSparepartFromCash;
+
+  String normalizeStage(String raw) {
+    if (serviceStages.contains(raw)) return raw;
+    if (raw == 'Menunggu Cek') return 'Diterima';
+    if (raw == 'Dikerjakan') return 'Diperbaiki';
+    return 'Diterima';
+  }
+
   String get todayKey {
     final n = DateTime.now();
     return '${n.year}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
@@ -215,13 +244,14 @@ class AppDataController extends ChangeNotifier {
   }
 
   String formatRupiah(int value) {
-    final s = value.toString();
+    final neg = value < 0;
+    final s = value.abs().toString();
     final buf = StringBuffer();
     for (int i = 0; i < s.length; i++) {
       if (i > 0 && (s.length - i) % 3 == 0) buf.write('.');
       buf.write(s[i]);
     }
-    return 'Rp $buf';
+    return '${neg ? "-" : ""}Rp $buf';
   }
 
   String formatDateTime(DateTime dt) {
@@ -412,7 +442,6 @@ class AppDataController extends ChangeNotifier {
     }
   }
 
-  // REVERSE OTP WA: mode 'register', 'reset', atau 'claim' (Klaim Nota / Ubah Nomor)
   Future<OtpStartResult> startReverseOtp({
     required String mode,
     required String rawPhone,
@@ -543,14 +572,10 @@ class AppDataController extends ChangeNotifier {
         final sDoc = await _db.collection('services').doc(claimServiceDocId).get();
         final sName = (sDoc.data()?['customerName'] ?? '').toString();
         if (sName.isNotEmpty && finalName == 'Member 2S') finalName = sName;
-        await _db.collection('services').doc(claimServiceDocId).update({
-          'customerPhone': phone,
-          'claimUsed': true,
-        });
+        await _db.collection('services').doc(claimServiceDocId).update({'customerPhone': phone, 'claimUsed': true});
       }
 
       if (claimOldPhone != null && claimOldPhone.isNotEmpty && claimOldPhone != phone) {
-        // Pindahkan semua nota lain yang memakai ID lama/TEMP ke nomor WA asli
         final otherSrvs = await _db.collection('services').where('customerPhone', isEqualTo: claimOldPhone).get();
         for (final os in otherSrvs.docs) {
           await os.reference.update({'customerPhone': phone});
@@ -582,16 +607,9 @@ class AppDataController extends ChangeNotifier {
           'claimedDailyMissions': [],
           'createdAt': FieldValue.serverTimestamp(),
         });
-        await userRef.collection('point_histories').add({
-          'title': 'Klaim Nota & Aktivasi Akun 2S',
-          'amount': bonusTransferPts,
-          'date': FieldValue.serverTimestamp(),
-        });
+        await userRef.collection('point_histories').add({'title': 'Klaim Nota & Aktivasi Akun 2S', 'amount': bonusTransferPts, 'date': FieldValue.serverTimestamp()});
       } else {
-        await userRef.update({
-          'passwordHash': passHash,
-          'isWaVerified': true,
-        });
+        await userRef.update({'passwordHash': passHash, 'isWaVerified': true});
       }
 
       final fresh = await userRef.get();
@@ -613,11 +631,7 @@ class AppDataController extends ChangeNotifier {
         if (refSnap.docs.isNotEmpty) {
           startPts += 50;
           await refSnap.docs.first.reference.update({'points': FieldValue.increment(100)});
-          await refSnap.docs.first.reference.collection('point_histories').add({
-            'title': 'Komisi Affiliate ($name)',
-            'amount': 100,
-            'date': FieldValue.serverTimestamp(),
-          });
+          await refSnap.docs.first.reference.collection('point_histories').add({'title': 'Komisi Affiliate ($name)', 'amount': 100, 'date': FieldValue.serverTimestamp()});
         }
       }
       final hasGoogle = pendingGoogleEmail != null && pendingGoogleEmail!.isNotEmpty;
@@ -680,9 +694,7 @@ class AppDataController extends ChangeNotifier {
 
   Future<void> _applyLoggedInUser(String phone, Map<String, dynamic> d) async {
     final savedDate = (d['claimedMissionDate'] ?? '').toString();
-    final List<String> dailyList = savedDate == todayKey
-        ? List<String>.from(d['claimedDailyMissions'] ?? [])
-        : <String>[];
+    final List<String> dailyList = savedDate == todayKey ? List<String>.from(d['claimedDailyMissions'] ?? []) : <String>[];
 
     currentUser = MemberUser(
       id: phone,
@@ -717,9 +729,7 @@ class AppDataController extends ChangeNotifier {
 
   Future<MemberUser?> lookupMemberByPhone(String rawInput) async {
     var clean = rawInput.trim();
-    if (clean.startsWith('2SMEMBER|')) {
-      clean = clean.replaceFirst('2SMEMBER|', '');
-    }
+    if (clean.startsWith('2SMEMBER|')) clean = clean.replaceFirst('2SMEMBER|', '');
     final isTemp = clean.toUpperCase().startsWith('TEMP-');
     final phone = isTemp ? clean.toUpperCase() : normalizePhone(clean);
     if (!isTemp && phone.length < 9) return null;
@@ -761,6 +771,7 @@ class AppDataController extends ChangeNotifier {
     _srvSub = _db.collection('services').orderBy('createdAt', descending: true).snapshots().listen((snap) {
       services = snap.docs.map((doc) {
         final d = doc.data();
+        final beforePhoto = (d['beforePhotoUrl'] ?? d['photoUrl'] ?? '').toString();
         return ServiceOrder(
           id: doc.id,
           invoiceNo: d['invoiceNo'] ?? '-',
@@ -771,14 +782,22 @@ class AppDataController extends ChangeNotifier {
           deviceName: d['deviceName'] ?? '-',
           complaint: d['complaint'] ?? '-',
           replacedPart: d['replacedPart'] ?? '-',
-          photoUrl: d['photoUrl'] ?? '',
+          beforePhotoUrl: beforePhoto,
+          afterPhotoUrl: (d['afterPhotoUrl'] ?? '').toString(),
           claimCode: d['claimCode'] ?? '',
           claimUsed: d['claimUsed'] ?? false,
-          status: d['status'] ?? 'Menunggu Cek',
+          paymentStatus: d['paymentStatus'] ?? 'Belum Bayar',
+          paidAmount: (d['paidAmount'] ?? 0) as int,
+          sparepartCost: (d['sparepartCost'] ?? 0) as int,
+          sparepartSource: d['sparepartSource'] ?? 'Kas Toko',
+          sparepartNote: d['sparepartNote'] ?? '',
+          techNote: d['techNote'] ?? '',
+          status: normalizeStage((d['status'] ?? 'Diterima').toString()),
           totalCost: (d['totalCost'] ?? 0) as int,
           createdAt: (d['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
           warrantyDays: (d['warrantyDays'] ?? 30) as int,
           warrantyClaimed: d['warrantyClaimed'] ?? false,
+          pointsAwarded: d['pointsAwarded'] ?? false,
         );
       }).toList();
       notifyListeners();
@@ -904,10 +923,7 @@ class AppDataController extends ChangeNotifier {
       } else {
         currentUser!.claimedDailyMissions = [...currentUser!.claimedDailyMissions, id];
       }
-      await _db.collection('users').doc(currentUser!.id).update({
-        'claimedMissionDate': todayKey,
-        'claimedDailyMissions': currentUser!.claimedDailyMissions,
-      });
+      await _db.collection('users').doc(currentUser!.id).update({'claimedMissionDate': todayKey, 'claimedDailyMissions': currentUser!.claimedDailyMissions});
     }
     await addPoints(reward, 'Klaim Misi: $title');
   }
@@ -932,9 +948,7 @@ class AppDataController extends ChangeNotifier {
       await addPoints(-20, 'Tiket Putar Mini Game');
     } else {
       currentUser!.lastSpinDate = DateTime.now();
-      await _db.collection('users').doc(currentUser!.id).update({
-        'lastSpinDate': Timestamp.fromDate(currentUser!.lastSpinDate!),
-      });
+      await _db.collection('users').doc(currentUser!.id).update({'lastSpinDate': Timestamp.fromDate(currentUser!.lastSpinDate!)});
     }
     final rewards = [10, 25, 50, 100, 0];
     final win = rewards[Random().nextInt(rewards.length)];
@@ -953,16 +967,11 @@ class AppDataController extends ChangeNotifier {
     currentUser!.points += amount;
     pointHistories.insert(0, PointHistory(title, amount, DateTime.now()));
     await _db.collection('users').doc(currentUser!.id).update({'points': FieldValue.increment(amount)});
-    await _db.collection('users').doc(currentUser!.id).collection('point_histories').add({
-      'title': title,
-      'amount': amount,
-      'date': FieldValue.serverTimestamp(),
-    });
+    await _db.collection('users').doc(currentUser!.id).collection('point_histories').add({'title': title, 'amount': amount, 'date': FieldValue.serverTimestamp()});
     await _loadLeaderboard();
     notifyListeners();
   }
 
-  // PEMBUATAN NOTA + AUTO-DAFTAR (TERMASUK AKUN TEMP) + KODE KLAIM 6 DIGIT
   Future<ServiceOrder> addNewService({
     required String custPhone,
     required String custName,
@@ -972,7 +981,9 @@ class AppDataController extends ChangeNotifier {
     required String repairAction,
     required int cost,
     required int warrantyDays,
-    String photoUrl = '',
+    String paymentStatus = 'Belum Bayar',
+    int paidAmount = 0,
+    String beforePhotoUrl = '',
   }) async {
     final trimmed = custPhone.trim().toUpperCase();
     final isTemp = trimmed.startsWith('TEMP-');
@@ -1004,11 +1015,7 @@ class AppDataController extends ChangeNotifier {
           'createdByCashier': true,
           'createdAt': FieldValue.serverTimestamp(),
         });
-        await userRef.collection('point_histories').add({
-          'title': 'Bonus Member Baru (Terdaftar via Nota)',
-          'amount': 150,
-          'date': FieldValue.serverTimestamp(),
-        });
+        await userRef.collection('point_histories').add({'title': 'Bonus Member Baru (Terdaftar via Nota)', 'amount': 150, 'date': FieldValue.serverTimestamp()});
       }
     }
 
@@ -1016,9 +1023,11 @@ class AppDataController extends ChangeNotifier {
     final rnd = Random();
     final claimCode = List.generate(6, (_) => chars[rnd.nextInt(chars.length)]).join();
 
+    final finalPaid = paymentStatus == 'Lunas' ? cost : (paymentStatus == 'Belum Bayar' ? 0 : paidAmount);
     final now = DateTime.now();
     final inv = '2S-INV-${now.millisecondsSinceEpoch.toString().substring(7)}';
     final fullDevice = '$brand $deviceType'.trim();
+
     final docRef = await _db.collection('services').add({
       'invoiceNo': inv,
       'customerPhone': phone,
@@ -1028,13 +1037,22 @@ class AppDataController extends ChangeNotifier {
       'deviceName': fullDevice.isEmpty ? 'Handphone' : fullDevice,
       'complaint': complaint.trim(),
       'replacedPart': repairAction.trim(),
-      'photoUrl': photoUrl,
+      'beforePhotoUrl': beforePhotoUrl,
+      'photoUrl': beforePhotoUrl,
+      'afterPhotoUrl': '',
       'claimCode': claimCode,
       'claimUsed': false,
-      'status': 'Menunggu Cek',
+      'paymentStatus': paymentStatus,
+      'paidAmount': finalPaid,
+      'sparepartCost': 0,
+      'sparepartSource': 'Kas Toko',
+      'sparepartNote': '',
+      'techNote': '',
+      'status': 'Diterima',
       'totalCost': cost,
       'warrantyDays': warrantyDays,
       'warrantyClaimed': false,
+      'pointsAwarded': false,
       'createdAt': Timestamp.fromDate(now),
     });
 
@@ -1048,17 +1066,62 @@ class AppDataController extends ChangeNotifier {
       deviceName: fullDevice.isEmpty ? 'Handphone' : fullDevice,
       complaint: complaint.trim(),
       replacedPart: repairAction.trim(),
-      photoUrl: photoUrl,
+      beforePhotoUrl: beforePhotoUrl,
       claimCode: claimCode,
-      claimUsed: false,
-      status: 'Menunggu Cek',
+      paymentStatus: paymentStatus,
+      paidAmount: finalPaid,
+      status: 'Diterima',
       totalCost: cost,
       createdAt: now,
       warrantyDays: warrantyDays,
     );
   }
 
-  // KASIR EDIT NO. HP LANGSUNG DI NOTA (JIKA SALAH KETIK DI TOKO)
+  Future<void> updateServiceProgress(
+    ServiceOrder s, {
+    required String status,
+    required String complaint,
+    required String repairAction,
+    required int totalCost,
+    required int warrantyDays,
+    required String paymentStatus,
+    required int paidAmount,
+    required String beforePhotoUrl,
+    required String afterPhotoUrl,
+    required int sparepartCost,
+    required String sparepartSource,
+    required String sparepartNote,
+    required String techNote,
+  }) async {
+    final normalizedPaid = paymentStatus == 'Lunas' ? totalCost : (paymentStatus == 'Belum Bayar' ? 0 : paidAmount);
+    await _db.collection('services').doc(s.id).update({
+      'status': status,
+      'complaint': complaint.trim(),
+      'replacedPart': repairAction.trim(),
+      'totalCost': totalCost,
+      'warrantyDays': warrantyDays,
+      'paymentStatus': paymentStatus,
+      'paidAmount': normalizedPaid,
+      'beforePhotoUrl': beforePhotoUrl,
+      'photoUrl': beforePhotoUrl,
+      'afterPhotoUrl': afterPhotoUrl,
+      'sparepartCost': sparepartCost,
+      'sparepartSource': sparepartSource,
+      'sparepartNote': sparepartNote.trim(),
+      'techNote': techNote.trim(),
+    });
+
+    if ((status == 'Selesai' || status == 'Diambil') && !s.pointsAwarded && s.customerPhone.isNotEmpty) {
+      await _db.collection('services').doc(s.id).update({'pointsAwarded': true});
+      await _db.collection('users').doc(s.customerPhone).set({'points': FieldValue.increment(50)}, SetOptions(merge: true));
+      if (s.customerPhone == currentUser?.id) {
+        currentUser!.points += 50;
+        pointHistories.insert(0, PointHistory('Poin Servis ${s.invoiceNo}', 50, DateTime.now()));
+      }
+    }
+    notifyListeners();
+  }
+
   Future<String?> updateServiceCustomerPhone(ServiceOrder s, String newRawPhone) async {
     final newPhone = normalizePhone(newRawPhone);
     if (newPhone.length < 9) return 'Nomor WA baru tidak valid.';
@@ -1088,18 +1151,6 @@ class AppDataController extends ChangeNotifier {
     return null;
   }
 
-  Future<void> updateServiceStatus(ServiceOrder s, String newStatus) async {
-    await _db.collection('services').doc(s.id).update({'status': newStatus});
-    if (newStatus == 'Selesai' && s.customerPhone.isNotEmpty) {
-      await _db.collection('users').doc(s.customerPhone).set({'points': FieldValue.increment(50)}, SetOptions(merge: true));
-      if (s.customerPhone == currentUser?.id) {
-        currentUser!.points += 50;
-        pointHistories.insert(0, PointHistory('Poin Servis ${s.invoiceNo}', 50, DateTime.now()));
-      }
-    }
-    notifyListeners();
-  }
-
   Future<void> claimWarranty(ServiceOrder s) async {
     await _db.collection('services').doc(s.id).update({'warrantyClaimed': true});
   }
@@ -1127,12 +1178,7 @@ class AppDataController extends ChangeNotifier {
   }
 
   Future<void> addVoucher({required String code, required int discountAmount, required int minSpend}) async {
-    await _db.collection('vouchers').add({
-      'code': code.trim().toUpperCase(),
-      'discountAmount': discountAmount,
-      'minSpend': minSpend,
-      'isActive': true,
-    });
+    await _db.collection('vouchers').add({'code': code.trim().toUpperCase(), 'discountAmount': discountAmount, 'minSpend': minSpend, 'isActive': true});
   }
 
   VoucherItem? findValidVoucher(String rawCode, int subtotal) {
