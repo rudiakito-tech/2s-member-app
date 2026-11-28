@@ -10,6 +10,7 @@ import 'create_nota_page.dart';
 import 'data_store.dart';
 import 'jp_theme_widgets.dart';
 import 'qr_member_widgets.dart';
+import 'service_progress_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -161,15 +162,16 @@ Future<void> sendNotaToWhatsapp(AppDataController ctrl, ServiceOrder s) async {
   if (phone.length < 9) return;
   final claimLine = (!s.claimUsed && s.claimCode.isNotEmpty) ? '\nKode Klaim: ${s.claimCode}' : '';
   final text = '*e-Nota 2S Service Handphone*\n'
-      'No. Nota : ${s.invoiceNo}\n'
-      'Tgl/Jam  : ${ctrl.formatDateTime(s.createdAt)}\n'
-      'Pelanggan: ${s.customerName.isEmpty ? "-" : s.customerName}\n'
-      'Unit HP  : ${s.fullDeviceName}\n'
-      'Kerusakan: ${s.complaint}\n'
-      'Perbaikan: ${s.replacedPart}\n'
-      'Status   : ${s.status}\n'
-      'Garansi  : ${s.warrantyDays} Hari\n'
-      'Harga    : ${ctrl.formatRupiah(s.totalCost)}$claimLine\n\n'
+      'No. Nota  : ${s.invoiceNo}\n'
+      'Tgl/Jam   : ${ctrl.formatDateTime(s.createdAt)}\n'
+      'Pelanggan : ${s.customerName.isEmpty ? "-" : s.customerName}\n'
+      'Unit HP   : ${s.fullDeviceName}\n'
+      'Kerusakan : ${s.complaint}\n'
+      'Perbaikan : ${s.replacedPart}\n'
+      'Status    : ${s.status}\n'
+      'Garansi   : ${s.warrantyDays} Hari\n'
+      'Harga     : ${ctrl.formatRupiah(s.totalCost)}\n'
+      'Pembayaran: ${s.paymentStatus} (Dibayar: ${ctrl.formatRupiah(s.paidAmount)}, Sisa: ${ctrl.formatRupiah(s.remainingPayment)})$claimLine\n\n'
       'Terima kasih telah servis di 2S Service Handphone!';
   final url = Uri.parse('https://wa.me/$phone?text=${Uri.encodeComponent(text)}');
   await launchUrl(url, mode: LaunchMode.externalApplication);
@@ -258,6 +260,13 @@ class HomeServiceTab extends StatelessWidget {
   final AppDataController ctrl;
   const HomeServiceTab({super.key, required this.ctrl});
 
+  void _openProgress(BuildContext context, ServiceOrder s) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => ServiceProgressPage(ctrl: ctrl, order: s, isAdmin: ctrl.isAdminMode)),
+    );
+  }
+
   void _showEditPhoneDialog(BuildContext context, ServiceOrder s) {
     final phoneC = TextEditingController(text: s.customerPhone.startsWith('TEMP-') ? '' : s.customerPhone);
     showDialog(
@@ -277,9 +286,7 @@ class HomeServiceTab extends StatelessWidget {
               if (!ctx.mounted) return;
               Navigator.pop(ctx);
               if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(err ?? 'Nomor HP nota berhasil diperbarui!')),
-                );
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err ?? 'Nomor HP nota berhasil diperbarui!')));
               }
             },
             child: const Text('Simpan'),
@@ -306,7 +313,7 @@ class HomeServiceTab extends StatelessWidget {
                   const SizedBox(height: 8),
                   const Text('Selamat Datang di 2S Service HP!', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 6),
-                  const Text('Login atau Daftar untuk melacak servis HP, e-Nota, garansi, QR Member, Check-in poin & belanja Store.', style: TextStyle(color: Colors.white70)),
+                  const Text('Login atau Daftar untuk melacak progres servis (Before/After), e-Nota, garansi, QR Member, & Store.', style: TextStyle(color: Colors.white70)),
                   const SizedBox(height: 14),
                   Row(
                     children: [
@@ -324,7 +331,7 @@ class HomeServiceTab extends StatelessWidget {
           const SizedBox(height: 8),
           const Card(child: ListTile(leading: Icon(Icons.qr_code_2, color: Colors.blue), title: Text('Kartu QR Member Praktis'), subtitle: Text('Cukup tunjukkan QR ke kasir saat servis tanpa sebut nomor berulang!'))),
           const Card(child: ListTile(leading: Icon(Icons.local_offer, color: Colors.orange), title: Text('Diskon Aksesoris Store'), subtitle: Text('Gunakan kode voucher & tukar poin saat checkout!'))),
-          const Card(child: ListTile(leading: Icon(Icons.verified_user, color: Colors.green), title: Text('e-Nota & Bukti Foto Garansi'), subtitle: Text('Lengkap dengan foto kondisi HP saat masuk servis.'))),
+          const Card(child: ListTile(leading: Icon(Icons.verified_user, color: Colors.green), title: Text('Foto Before/After & Garansi Digital'), subtitle: Text('Pantau 5 tahap progres servis langsung dari HP Anda.'))),
         ],
       );
     }
@@ -379,63 +386,115 @@ class HomeServiceTab extends StatelessWidget {
             ),
           ),
         ),
+
+        // REKAP KAS TOKO & MODAL SPAREPART (KHUSUS MODE KASIR)
+        if (ctrl.isAdminMode) ...[
+          const SizedBox(height: 12),
+          Card(
+            color: Colors.amber.withValues(alpha: 0.16),
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Rekap Kas Servis & Sparepart (Kasir)', style: TextStyle(fontWeight: FontWeight.w800, color: JpColors.navy)),
+                  const SizedBox(height: 6),
+                  Text('• Masuk Kas Toko (Bayar Pelanggan): ${ctrl.formatRupiah(ctrl.totalCashInFromCustomers)}', style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Colors.green)),
+                  Text('• Beli Sparepart (Kas Toko)       : ${ctrl.formatRupiah(ctrl.totalSparepartFromCash)}', style: const TextStyle(fontSize: 12.5)),
+                  Text('• Beli Sparepart (TF dari Owner)  : ${ctrl.formatRupiah(ctrl.totalSparepartFromOwner)}', style: const TextStyle(fontSize: 12.5)),
+                  const Divider(height: 12),
+                  Text('Sisa Kas Bersih Toko: ${ctrl.formatRupiah(ctrl.netStoreCash)}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: JpColors.navy)),
+                ],
+              ),
+            ),
+          ),
+        ],
+
         const SizedBox(height: 16),
-        const Text('Transaksi Servis, Nota & Garansi', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+        const Text('Transaksi Servis, Progres, Nota & Garansi', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
         if (visibleServices.isEmpty)
           const Card(child: Padding(padding: EdgeInsets.all(16), child: Text('Belum ada transaksi servis atas nomor WA Anda.'))),
         ...visibleServices.map((s) => Card(
               margin: const EdgeInsets.only(bottom: 12),
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(s.invoiceNo, style: const TextStyle(fontWeight: FontWeight.bold)), Chip(label: Text(s.status))]),
-                    Text('${ctrl.formatDateTime(s.createdAt)}${s.customerName.isNotEmpty ? " • ${s.customerName}" : ""}', style: const TextStyle(fontSize: 12, color: Colors.black54)),
-                    if (ctrl.isAdminMode)
-                      Text(
-                        'HP: ${s.customerPhone}${(!s.claimUsed && s.claimCode.isNotEmpty) ? " • Kode Klaim: ${s.claimCode}" : ""}',
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF1E56A0)),
-                      ),
-                    if (s.photoUrl.isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(s.photoUrl, height: 120, width: double.infinity, fit: BoxFit.cover)),
-                      const SizedBox(height: 8),
-                    ],
-                    const SizedBox(height: 4),
-                    Text(s.fullDeviceName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                    Text('Kerusakan: ${s.complaint}'),
-                    Text('Perbaikan: ${s.replacedPart}'),
-                    Text('Harga: ${ctrl.formatRupiah(s.totalCost)}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
-                    Text(
-                      s.status == 'Selesai' || s.status == 'Diambil' ? 'Garansi: Sisa ${s.remainingWarrantyDays} hari (dari ${s.warrantyDays} hr)' : 'Garansi ${s.warrantyDays} hari (aktif setelah selesai)',
-                      style: TextStyle(color: s.remainingWarrantyDays > 0 ? Colors.green : Colors.red),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      children: [
-                        OutlinedButton.icon(onPressed: () => _showNotaDialog(context, s), icon: const Icon(Icons.receipt_long, size: 18), label: const Text('e-Nota')),
-                        if (ctrl.isAdminMode && !s.customerPhone.startsWith('TEMP-'))
-                          OutlinedButton.icon(onPressed: () => sendNotaToWhatsapp(ctrl, s), icon: const Icon(Icons.chat, size: 18, color: Colors.green), label: const Text('Kirim WA')),
-                        if (ctrl.isAdminMode)
-                          OutlinedButton.icon(onPressed: () => _showEditPhoneDialog(context, s), icon: const Icon(Icons.edit, size: 17), label: const Text('Edit No. HP')),
-                        if ((s.status == 'Selesai' || s.status == 'Diambil') && s.remainingWarrantyDays > 0 && !s.warrantyClaimed)
-                          OutlinedButton.icon(onPressed: () => ctrl.claimWarranty(s), icon: const Icon(Icons.verified_user, size: 18), label: const Text('Klaim Garansi')),
-                        if (s.warrantyClaimed) const Chip(label: Text('Garansi Diajukan')),
-                        if (ctrl.isAdminMode)
-                          DropdownButton<String>(
-                            value: s.status,
-                            items: ['Menunggu Cek', 'Dikerjakan', 'Selesai', 'Diambil'].map((st) => DropdownMenuItem(value: st, child: Text(st))).toList(),
-                            onChanged: (v) {
-                              if (v != null) ctrl.updateServiceStatus(s, v);
-                            },
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => _openProgress(context, s),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(s.invoiceNo, style: const TextStyle(fontWeight: FontWeight.bold)),
+                          Wrap(
+                            spacing: 6,
+                            children: [
+                              Chip(label: Text(s.status, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold))),
+                              Chip(
+                                backgroundColor: s.paymentStatus == 'Lunas' ? Colors.green.withValues(alpha: 0.15) : Colors.orange.withValues(alpha: 0.15),
+                                label: Text(s.paymentStatus, style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: s.paymentStatus == 'Lunas' ? Colors.green[800] : Colors.orange[900])),
+                              ),
+                            ],
                           ),
+                        ],
+                      ),
+                      Text('${ctrl.formatDateTime(s.createdAt)}${s.customerName.isNotEmpty ? " • ${s.customerName}" : ""}', style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                      if (ctrl.isAdminMode)
+                        Text(
+                          'HP: ${s.customerPhone}${(!s.claimUsed && s.claimCode.isNotEmpty) ? " • Klaim: ${s.claimCode}" : ""}',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF1E56A0)),
+                        ),
+                      if (s.beforePhotoUrl.isNotEmpty || s.afterPhotoUrl.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            if (s.beforePhotoUrl.isNotEmpty)
+                              Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(s.beforePhotoUrl, height: 85, fit: BoxFit.cover))),
+                            if (s.beforePhotoUrl.isNotEmpty && s.afterPhotoUrl.isNotEmpty) const SizedBox(width: 8),
+                            if (s.afterPhotoUrl.isNotEmpty)
+                              Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(s.afterPhotoUrl, height: 85, fit: BoxFit.cover))),
+                          ],
+                        ),
                       ],
-                    ),
-                  ],
+                      const SizedBox(height: 6),
+                      Text(s.fullDeviceName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                      Text('Kerusakan: ${s.complaint}'),
+                      Text('Perbaikan: ${s.replacedPart}'),
+                      Text(
+                        'Harga: ${ctrl.formatRupiah(s.totalCost)}${s.remainingPayment > 0 ? " (Sisa: ${ctrl.formatRupiah(s.remainingPayment)})" : ""}',
+                        style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue),
+                      ),
+                      if (ctrl.isAdminMode && s.sparepartCost > 0)
+                        Text('Modal Sparepart: ${ctrl.formatRupiah(s.sparepartCost)} (${s.sparepartSource})', style: const TextStyle(fontSize: 12, color: Colors.deepOrange, fontWeight: FontWeight.w600)),
+                      Text(
+                        s.status == 'Selesai' || s.status == 'Diambil' ? 'Garansi: Sisa ${s.remainingWarrantyDays} hari (dari ${s.warrantyDays} hr)' : 'Garansi ${s.warrantyDays} hari (aktif setelah selesai)',
+                        style: TextStyle(color: s.remainingWarrantyDays > 0 ? Colors.green : Colors.red),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        children: [
+                          FilledButton.tonalIcon(
+                            onPressed: () => _openProgress(context, s),
+                            icon: Icon(ctrl.isAdminMode ? Icons.tune : Icons.timeline, size: 18),
+                            label: Text(ctrl.isAdminMode ? 'Update Progres & Sparepart' : 'Lihat Progres'),
+                          ),
+                          OutlinedButton.icon(onPressed: () => _showNotaDialog(context, s), icon: const Icon(Icons.receipt_long, size: 18), label: const Text('e-Nota')),
+                          if (ctrl.isAdminMode && !s.customerPhone.startsWith('TEMP-'))
+                            OutlinedButton.icon(onPressed: () => sendNotaToWhatsapp(ctrl, s), icon: const Icon(Icons.chat, size: 18, color: Colors.green), label: const Text('Kirim WA')),
+                          if (ctrl.isAdminMode)
+                            OutlinedButton.icon(onPressed: () => _showEditPhoneDialog(context, s), icon: const Icon(Icons.edit, size: 17), label: const Text('Edit No. HP')),
+                          if ((s.status == 'Selesai' || s.status == 'Diambil') && s.remainingWarrantyDays > 0 && !s.warrantyClaimed)
+                            OutlinedButton.icon(onPressed: () => ctrl.claimWarranty(s), icon: const Icon(Icons.verified_user, size: 18), label: const Text('Klaim Garansi')),
+                          if (s.warrantyClaimed) const Chip(label: Text('Garansi Diajukan')),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
             )),
@@ -453,12 +512,19 @@ class HomeServiceTab extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (s.photoUrl.isNotEmpty) ...[
-                ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(s.photoUrl, height: 140, width: double.infinity, fit: BoxFit.cover)),
-                const SizedBox(height: 10),
+              if (s.beforePhotoUrl.isNotEmpty) ...[
+                const Text('Foto Before:', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(s.beforePhotoUrl, height: 120, width: double.infinity, fit: BoxFit.cover)),
+                const SizedBox(height: 8),
+              ],
+              if (s.afterPhotoUrl.isNotEmpty) ...[
+                const Text('Foto After:', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(s.afterPhotoUrl, height: 120, width: double.infinity, fit: BoxFit.cover)),
+                const SizedBox(height: 8),
               ],
               Text('No. Nota  : ${s.invoiceNo}'),
               Text('Tgl/Jam   : ${ctrl.formatDateTime(s.createdAt)}'),
+              Text('Status    : ${s.status}'),
               Text('Pelanggan : ${s.customerName.isEmpty ? "-" : s.customerName}'),
               Text('No. WA    : ${s.customerPhone}'),
               if (!s.claimUsed && s.claimCode.isNotEmpty) Text('Kode Klaim: ${s.claimCode}', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1E56A0))),
@@ -468,6 +534,7 @@ class HomeServiceTab extends StatelessWidget {
               Text('Garansi   : ${s.warrantyDays} Hari'),
               const Divider(),
               Text('Total     : ${ctrl.formatRupiah(s.totalCost)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              Text('Pembayaran: ${s.paymentStatus} (Bayar: ${ctrl.formatRupiah(s.paidAmount)}, Sisa: ${ctrl.formatRupiah(s.remainingPayment)})', style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
             ],
           ),
         ),
