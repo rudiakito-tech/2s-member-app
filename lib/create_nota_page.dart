@@ -1,4 +1,6 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'cloudinary_service.dart';
 import 'data_store.dart';
 import 'jp_theme_widgets.dart';
@@ -29,6 +31,7 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
   MemberUser? _foundMember;
   bool _searched = false;
   bool _searching = false;
+  bool _isTempMode = false;
   bool _uploadingPhoto = false;
   bool _saving = false;
   String _photoUrl = '';
@@ -53,13 +56,29 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
     super.dispose();
   }
 
+  void _activateTempAccount() {
+    final code = 100000 + Random().nextInt(899999);
+    setState(() {
+      _isTempMode = true;
+      _searched = false;
+      _foundMember = null;
+      _phoneC.text = 'TEMP-$code';
+    });
+  }
+
   Future<void> _lookupCustomer(String rawInput) async {
+    final upper = rawInput.trim().toUpperCase();
+    if (upper.startsWith('TEMP-')) {
+      setState(() => _isTempMode = true);
+      return;
+    }
     final clean = widget.ctrl.normalizePhone(rawInput.replaceFirst('2SMEMBER|', ''));
     if (clean.length < 9) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Masukkan nomor HP yang valid (min. 9 digit).')));
       return;
     }
     setState(() {
+      _isTempMode = false;
       _searching = true;
       _phoneC.text = clean;
     });
@@ -69,17 +88,12 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
       _searching = false;
       _searched = true;
       _foundMember = member;
-      if (member != null) {
-        _nameC.text = member.name;
-      }
+      if (member != null) _nameC.text = member.name;
     });
   }
 
   Future<void> _scanQrCustomer() async {
-    final raw = await Navigator.push<String>(
-      context,
-      MaterialPageRoute(builder: (_) => const QrScannerPage()),
-    );
+    final raw = await Navigator.push<String>(context, MaterialPageRoute(builder: (_) => const QrScannerPage()));
     if (!mounted || raw == null) return;
     await _lookupCustomer(raw);
   }
@@ -92,15 +106,16 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
       _uploadingPhoto = false;
       if (res?.url != null) _photoUrl = res!.url!;
     });
-    if (res?.error != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res!.error!)));
-    }
+    if (res?.error != null) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res!.error!)));
   }
 
   Future<void> _saveNota() async {
-    final phone = widget.ctrl.normalizePhone(_phoneC.text);
-    if (phone.length < 9) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nomor HP pelanggan wajib diisi.')));
+    final rawPhone = _phoneC.text.trim().toUpperCase();
+    final isTemp = rawPhone.startsWith('TEMP-');
+    final phone = isTemp ? rawPhone : widget.ctrl.normalizePhone(_phoneC.text);
+
+    if (!isTemp && phone.length < 9) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nomor HP wajib diisi, atau klik "Lupa / Tanpa No. HP".')));
       return;
     }
     if (_nameC.text.trim().isEmpty) {
@@ -132,7 +147,7 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
     if (!mounted) return;
     setState(() => _saving = false);
 
-    final isNewMember = _foundMember == null;
+    final claimInfoText = 'No. Nota: ${order.invoiceNo}\nKode Klaim: ${order.claimCode}';
     await showDialog(
       context: context,
       barrierDismissible: false,
@@ -146,33 +161,44 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
             Text('Pelanggan: ${order.customerName} (${order.customerPhone})'),
             Text('Unit     : ${order.fullDeviceName}'),
             Text('Total    : ${widget.ctrl.formatRupiah(order.totalCost)}'),
-            if (isNewMember) ...[
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(color: Colors.blue.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)),
-                child: const Text(
-                  'Pelanggan baru otomatis terdaftar sebagai 2S Member (+150 Poin). Password dapat dibuat pelanggan lewat menu Lupa Password (Reverse OTP).',
-                  style: TextStyle(fontSize: 12, color: JpColors.navy),
-                ),
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: Colors.amber.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(10), border: Border.all(color: JpColors.gold)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Kode Klaim Akun: ${order.claimCode}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: JpColors.navy)),
+                  const SizedBox(height: 3),
+                  const Text(
+                    'Berikan No. Nota & Kode Klaim ini ke pelanggan (dipakai jika lupa No. HP atau salah sebut nomor agar bisa klaim mandiri).',
+                    style: TextStyle(fontSize: 11.5, color: JpColors.navyMuted),
+                  ),
+                ],
               ),
-            ],
+            ),
           ],
         ),
         actions: [
-          if (widget.onSendWa != null)
+          TextButton.icon(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: claimInfoText));
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No. Nota & Kode Klaim disalin!')));
+            },
+            icon: const Icon(Icons.copy, size: 17),
+            label: const Text('Salin Klaim'),
+          ),
+          if (!isTemp && widget.onSendWa != null)
             TextButton.icon(
               onPressed: () async {
                 Navigator.pop(ctx);
                 await widget.onSendWa!(order);
               },
               icon: const Icon(Icons.chat, color: Colors.green),
-              label: const Text('Kirim Nota ke WA'),
+              label: const Text('Kirim WA'),
             ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Selesai'),
-          ),
+          FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Selesai')),
         ],
       ),
     );
@@ -189,7 +215,6 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // TANGGAL & JAM OTOMATIS
           Card(
             color: JpColors.navy,
             child: ListTile(
@@ -200,31 +225,51 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
           ),
           const SizedBox(height: 12),
 
-          // BAGIAN 1: FORM PELANGGAN (CARI NO. HP / SCAN QR DI UJUNG KANAN)
           Card(
             child: Padding(
               padding: const EdgeInsets.all(14),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('1. Data Pelanggan', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: JpColors.navy)),
-                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('1. Data Pelanggan', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: JpColors.navy)),
+                      TextButton.icon(
+                        onPressed: _activateTempAccount,
+                        icon: const Icon(Icons.person_off_outlined, size: 17),
+                        label: const Text('Lupa / Tanpa No. HP', style: TextStyle(fontSize: 12)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
                   TextField(
                     controller: _phoneC,
                     keyboardType: TextInputType.phone,
+                    readOnly: _isTempMode,
                     onSubmitted: _lookupCustomer,
                     decoration: InputDecoration(
-                      labelText: 'No. HP / WhatsApp Pelanggan',
+                      labelText: _isTempMode ? 'ID Sementara (Otomatis)' : 'No. HP / WhatsApp Pelanggan',
                       hintText: '0812... atau 628...',
                       border: const OutlineInputBorder(),
                       suffixIcon: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          IconButton(
-                            tooltip: 'Cari No. HP',
-                            onPressed: _searching ? null : () => _lookupCustomer(_phoneC.text),
-                            icon: _searching ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.search),
-                          ),
+                          if (_isTempMode)
+                            IconButton(
+                              tooltip: 'Kembali isi No. HP',
+                              onPressed: () => setState(() {
+                                _isTempMode = false;
+                                _phoneC.clear();
+                              }),
+                              icon: const Icon(Icons.close, color: Colors.red),
+                            )
+                          else
+                            IconButton(
+                              tooltip: 'Cari No. HP',
+                              onPressed: _searching ? null : () => _lookupCustomer(_phoneC.text),
+                              icon: _searching ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.search),
+                            ),
                           IconButton(
                             tooltip: 'Scan QR Pelanggan',
                             onPressed: _scanQrCustomer,
@@ -235,15 +280,21 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
                     ),
                   ),
                   const SizedBox(height: 10),
-                  if (_searched && _foundMember != null)
+                  if (_isTempMode)
                     Container(
                       margin: const EdgeInsets.only(bottom: 10),
                       padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.green.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.green.withValues(alpha: 0.4)),
+                      decoration: BoxDecoration(color: Colors.amber.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(12), border: Border.all(color: JpColors.gold)),
+                      child: const Text(
+                        '🆕 Mode Tanpa No. HP: Akun sementara dibuatkan otomatis. Nanti pelanggan tinggal pakai menu "Klaim Nota" dengan No. Nota & Kode Klaim untuk isi No. WA asli dan buat password.',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: JpColors.navy),
                       ),
+                    )
+                  else if (_searched && _foundMember != null)
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(color: Colors.green.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.green.withValues(alpha: 0.4))),
                       child: Row(
                         children: [
                           CircleAvatar(
@@ -269,11 +320,7 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
                     Container(
                       margin: const EdgeInsets.only(bottom: 10),
                       padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.orange.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.orange.withValues(alpha: 0.5)),
-                      ),
+                      decoration: BoxDecoration(color: Colors.orange.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.orange.withValues(alpha: 0.5))),
                       child: const Text(
                         '🆕 Pelanggan Baru: Cukup isi Nama & No. HP. Sistem otomatis mendaftarkan akun default, dan password diatur pelanggan via Lupa Password (Reverse OTP).',
                         style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: JpColors.navy),
@@ -289,7 +336,6 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
           ),
           const SizedBox(height: 12),
 
-          // BAGIAN 2: DETAIL UNIT, KERUSAKAN, PERBAIKAN, HARGA & GARANSI
           Card(
             child: Padding(
               padding: const EdgeInsets.all(14),
