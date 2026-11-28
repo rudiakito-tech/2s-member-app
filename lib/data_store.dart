@@ -571,6 +571,30 @@ class AppDataController extends ChangeNotifier {
     notifyListeners();
   }
 
+  // CARI DATA MEMBER DARI SCAN QR KASIR
+  Future<MemberUser?> lookupMemberByPhone(String rawInput) async {
+    var clean = rawInput.trim();
+    if (clean.startsWith('2SMEMBER|')) {
+      clean = clean.replaceFirst('2SMEMBER|', '');
+    }
+    final phone = normalizePhone(clean);
+    if (phone.length < 9) return null;
+    final doc = await _db.collection('users').doc(phone).get();
+    if (!doc.exists) return null;
+    final d = doc.data()!;
+    return MemberUser(
+      id: phone,
+      name: d['name'] ?? 'Member 2S',
+      phone: phone,
+      email: d['email'] ?? '',
+      photoUrl: d['photoUrl'] ?? '',
+      isEmailVerified: d['isEmailVerified'] ?? false,
+      isWaVerified: d['isWaVerified'] ?? true,
+      points: (d['points'] ?? 0) as int,
+      referralCode: d['referralCode'] ?? '2S-$phone',
+    );
+  }
+
   Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('2s_logged_phone');
@@ -930,3 +954,4 @@ class AppDataController extends ChangeNotifier {
     super.dispose();
   }
 }
+// AKHIR FILE data_store.dart
