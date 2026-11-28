@@ -2,11 +2,13 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'app_config.dart';
 import 'auth_page.dart';
 import 'cloudinary_service.dart';
 import 'data_store.dart';
 import 'jp_theme_widgets.dart';
+import 'qr_member_widgets.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -152,6 +154,22 @@ void promptLoginDialog(BuildContext context, AppDataController ctrl, String acti
   );
 }
 
+Future<void> sendNotaToWhatsapp(AppDataController ctrl, ServiceOrder s) async {
+  final phone = ctrl.normalizePhone(s.customerPhone);
+  if (phone.length < 9) return;
+  final text = '*e-Nota 2S Service Handphone*\n'
+      'No. Nota : ${s.invoiceNo}\n'
+      'Perangkat: ${s.deviceName}\n'
+      'Keluhan  : ${s.complaint}\n'
+      'Sparepart: ${s.replacedPart}\n'
+      'Status   : ${s.status}\n'
+      'Garansi  : ${s.warrantyDays} Hari\n'
+      'Total    : ${ctrl.formatRupiah(s.totalCost)}\n\n'
+      'Terima kasih telah servis di 2S Service Handphone!';
+  final url = Uri.parse('https://wa.me/$phone?text=${Uri.encodeComponent(text)}');
+  await launchUrl(url, mode: LaunchMode.externalApplication);
+}
+
 class MainShell extends StatefulWidget {
   final AppDataController ctrl;
   const MainShell({super.key, required this.ctrl});
@@ -161,6 +179,171 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   int _tab = 0;
+
+  Future<void> _scanAndOpenServiceDialog() async {
+    final raw = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(builder: (_) => const QrScannerPage()),
+    );
+    if (!mounted || raw == null) return;
+
+    final member = await widget.ctrl.lookupMemberByPhone(raw);
+    if (!mounted) return;
+    final cleanPhone = widget.ctrl.normalizePhone(raw.replaceFirst('2SMEMBER|', ''));
+    _showAddServiceDialog(context, scannedMember: member, fallbackPhone: cleanPhone);
+  }
+
+  void _showAddServiceDialog(BuildContext context, {MemberUser? scannedMember, String? fallbackPhone}) {
+    final phoneC = TextEditingController(text: scannedMember?.phone ?? fallbackPhone ?? '');
+    final devC = TextEditingController();
+    final compC = TextEditingController();
+    final partC = TextEditingController();
+    final costC = TextEditingController(text: '250000');
+    final warrC = TextEditingController(text: '30');
+    MemberUser? selectedMember = scannedMember;
+    String photoUrl = '';
+    bool uploading = false;
+    bool lookingUp = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDlg) => AlertDialog(
+          title: const Text('Buat Nota Servis'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (selectedMember != null)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.green.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.green.withValues(alpha: 0.4)),
+                    ),
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 20,
+                          backgroundImage: selectedMember!.photoUrl.isNotEmpty ? NetworkImage(selectedMember!.photoUrl) : null,
+                          child: selectedMember!.photoUrl.isEmpty ? const Icon(Icons.person) : null,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(selectedMember!.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
+                              Text('${selectedMember!.tier} • ${selectedMember!.points} pts', style: const TextStyle(fontSize: 11.5, color: Colors.green)),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.verified, color: Colors.green, size: 20),
+                      ],
+                    ),
+                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: phoneC,
+                        keyboardType: TextInputType.phone,
+                        decoration: const InputDecoration(labelText: 'No. WA Pelanggan'),
+                        onSubmitted: (v) async {
+                          setDlg(() => lookingUp = true);
+                          final m = await widget.ctrl.lookupMemberByPhone(v);
+                          if (ctx.mounted) setDlg(() { selectedMember = m; lookingUp = false; });
+                        },
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Cari Member',
+                      onPressed: lookingUp
+                          ? null
+                          : () async {
+                              setDlg(() => lookingUp = true);
+                              final m = await widget.ctrl.lookupMemberByPhone(phoneC.text);
+                              if (ctx.mounted) setDlg(() { selectedMember = m; lookingUp = false; });
+                            },
+                      icon: lookingUp ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.search),
+                    ),
+                    IconButton(
+                      tooltip: 'Scan QR Member',
+                      onPressed: () async {
+                        final raw = await Navigator.push<String>(ctx, MaterialPageRoute(builder: (_) => const QrScannerPage()));
+                        if (!ctx.mounted || raw == null) return;
+                        setDlg(() => lookingUp = true);
+                        final m = await widget.ctrl.lookupMemberByPhone(raw);
+                        if (!ctx.mounted) return;
+                        setDlg(() {
+                          lookingUp = false;
+                          selectedMember = m;
+                          phoneC.text = m?.phone ?? widget.ctrl.normalizePhone(raw.replaceFirst('2SMEMBER|', ''));
+                        });
+                      },
+                      icon: const Icon(Icons.qr_code_scanner, color: JpColors.orange),
+                    ),
+                  ],
+                ),
+                TextField(controller: devC, decoration: const InputDecoration(labelText: 'Tipe HP')),
+                TextField(controller: compC, decoration: const InputDecoration(labelText: 'Keluhan')),
+                TextField(controller: partC, decoration: const InputDecoration(labelText: 'Sparepart')),
+                Row(
+                  children: [
+                    Expanded(child: TextField(controller: costC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Biaya (Rp)'))),
+                    const SizedBox(width: 10),
+                    SizedBox(width: 90, child: TextField(controller: warrC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Garansi (Hr)'))),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                if (photoUrl.isNotEmpty)
+                  ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(photoUrl, height: 100, width: double.infinity, fit: BoxFit.cover)),
+                const SizedBox(height: 6),
+                OutlinedButton.icon(
+                  onPressed: uploading
+                      ? null
+                      : () async {
+                          setDlg(() => uploading = true);
+                          final res = await CloudinaryService.pickAndUpload(ctx, folder: '2s_member/services');
+                          if (!ctx.mounted) return;
+                          setDlg(() {
+                            uploading = false;
+                            if (res?.url != null) photoUrl = res!.url!;
+                          });
+                          if (res?.error != null) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res!.error!)));
+                        },
+                  icon: uploading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.camera_alt),
+                  label: Text(photoUrl.isEmpty ? 'Upload Foto Kondisi HP' : 'Ganti Foto HP'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+            FilledButton(
+              onPressed: uploading
+                  ? null
+                  : () async {
+                      await widget.ctrl.addNewService(
+                        phoneC.text,
+                        devC.text.isEmpty ? 'HP Pelanggan' : devC.text,
+                        compC.text.isEmpty ? 'Pengecekan' : compC.text,
+                        partC.text.isEmpty ? 'Jasa Servis' : partC.text,
+                        int.tryParse(costC.text) ?? 150000,
+                        int.tryParse(warrC.text) ?? 30,
+                        photoUrl: photoUrl,
+                      );
+                      if (ctx.mounted) Navigator.pop(ctx);
+                    },
+              child: const Text('Simpan Nota'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -181,21 +364,28 @@ class _MainShellState extends State<MainShell> {
               padding: const EdgeInsets.only(right: 8),
               child: FilledButton.tonal(onPressed: () => openAuthPage(context, widget.ctrl, tab: 0), child: const Text('Login / Daftar')),
             )
-          else if (widget.ctrl.canUseAdmin)
+          else if (widget.ctrl.canUseAdmin) ...[
+            if (widget.ctrl.isAdminMode)
+              IconButton(
+                tooltip: 'Scan QR Buat Nota',
+                onPressed: _scanAndOpenServiceDialog,
+                icon: const Icon(Icons.qr_code_scanner, color: JpColors.orange),
+              ),
             Row(
               children: [
                 const Text('Kasir', style: TextStyle(fontSize: 12)),
                 Switch(value: widget.ctrl.isAdminMode, onChanged: (v) => setState(() => widget.ctrl.isAdminMode = v)),
               ],
             ),
+          ],
         ],
       ),
       body: pages[_tab],
       floatingActionButton: widget.ctrl.isAdminMode && widget.ctrl.canUseAdmin && _tab == 0
           ? FloatingActionButton.extended(
-              onPressed: () => _showAddServiceDialog(context),
-              icon: const Icon(Icons.add),
-              label: const Text('Input Servis'),
+              onPressed: _scanAndOpenServiceDialog,
+              icon: const Icon(Icons.qr_code_scanner),
+              label: const Text('Scan QR Nota'),
             )
           : null,
       bottomNavigationBar: NavigationBar(
@@ -208,82 +398,6 @@ class _MainShellState extends State<MainShell> {
           NavigationDestination(icon: Icon(Icons.leaderboard), label: 'Peringkat'),
           NavigationDestination(icon: Icon(Icons.person), label: 'Profil'),
         ],
-      ),
-    );
-  }
-
-  void _showAddServiceDialog(BuildContext context) {
-    final phoneC = TextEditingController(text: widget.ctrl.currentUser?.phone ?? '');
-    final devC = TextEditingController();
-    final compC = TextEditingController();
-    final partC = TextEditingController();
-    final costC = TextEditingController(text: '250000');
-    String photoUrl = '';
-    bool uploading = false;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlg) => AlertDialog(
-          title: const Text('Tambah Transaksi Servis'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(controller: phoneC, keyboardType: TextInputType.phone, decoration: const InputDecoration(labelText: 'No. WA Pelanggan')),
-                TextField(controller: devC, decoration: const InputDecoration(labelText: 'Tipe HP')),
-                TextField(controller: compC, decoration: const InputDecoration(labelText: 'Keluhan')),
-                TextField(controller: partC, decoration: const InputDecoration(labelText: 'Sparepart')),
-                TextField(controller: costC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Biaya (Rp)')),
-                const SizedBox(height: 10),
-                if (photoUrl.isNotEmpty)
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: Image.network(photoUrl, height: 110, width: double.infinity, fit: BoxFit.cover),
-                  ),
-                const SizedBox(height: 6),
-                OutlinedButton.icon(
-                  onPressed: uploading
-                      ? null
-                      : () async {
-                          setDlg(() => uploading = true);
-                          final res = await CloudinaryService.pickAndUpload(ctx, folder: '2s_member/services');
-                          if (!ctx.mounted) return;
-                          setDlg(() {
-                            uploading = false;
-                            if (res?.url != null) photoUrl = res!.url!;
-                          });
-                          if (res?.error != null) {
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res!.error!)));
-                          }
-                        },
-                  icon: uploading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.camera_alt),
-                  label: Text(photoUrl.isEmpty ? 'Upload Foto Kondisi HP' : 'Ganti Foto HP'),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
-            FilledButton(
-              onPressed: uploading
-                  ? null
-                  : () async {
-                      await widget.ctrl.addNewService(
-                        phoneC.text,
-                        devC.text.isEmpty ? 'HP Pelanggan' : devC.text,
-                        compC.text.isEmpty ? 'Pengecekan' : compC.text,
-                        partC.text.isEmpty ? 'Jasa Servis' : partC.text,
-                        int.tryParse(costC.text) ?? 150000,
-                        30,
-                        photoUrl: photoUrl,
-                      );
-                      if (ctx.mounted) Navigator.pop(ctx);
-                    },
-              child: const Text('Simpan'),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -306,35 +420,17 @@ class HomeServiceTab extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.card_giftcard, color: JpColors.gold),
-                      SizedBox(width: 8),
-                      Text('Mode Tamu • Promo Member Baru', style: TextStyle(color: JpColors.gold, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
+                  const Row(children: [Icon(Icons.card_giftcard, color: JpColors.gold), SizedBox(width: 8), Text('Mode Tamu • Promo Member Baru', style: TextStyle(color: JpColors.gold, fontWeight: FontWeight.bold))]),
                   const SizedBox(height: 8),
                   const Text('Selamat Datang di 2S Service HP!', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 6),
-                  const Text('Login atau Daftar untuk melacak servis HP, e-Nota, garansi, Check-in poin & belanja Store.', style: TextStyle(color: Colors.white70)),
+                  const Text('Login atau Daftar untuk melacak servis HP, e-Nota, garansi, QR Member, Check-in poin & belanja Store.', style: TextStyle(color: Colors.white70)),
                   const SizedBox(height: 14),
                   Row(
                     children: [
-                      Expanded(
-                        child: FilledButton(
-                          style: FilledButton.styleFrom(backgroundColor: JpColors.orange, foregroundColor: Colors.white),
-                          onPressed: () => openAuthPage(context, ctrl, tab: 0),
-                          child: const Text('Login', style: TextStyle(fontWeight: FontWeight.bold)),
-                        ),
-                      ),
+                      Expanded(child: FilledButton(style: FilledButton.styleFrom(backgroundColor: JpColors.orange, foregroundColor: Colors.white), onPressed: () => openAuthPage(context, ctrl, tab: 0), child: const Text('Login', style: TextStyle(fontWeight: FontWeight.bold)))),
                       const SizedBox(width: 10),
-                      Expanded(
-                        child: OutlinedButton(
-                          style: OutlinedButton.styleFrom(foregroundColor: Colors.white, side: const BorderSide(color: Colors.white)),
-                          onPressed: () => openAuthPage(context, ctrl, tab: 1),
-                          child: const Text('Daftar (+150 Poin)'),
-                        ),
-                      ),
+                      Expanded(child: OutlinedButton(style: OutlinedButton.styleFrom(foregroundColor: Colors.white, side: const BorderSide(color: Colors.white)), onPressed: () => openAuthPage(context, ctrl, tab: 1), child: const Text('Daftar (+150 Poin)'))),
                     ],
                   ),
                 ],
@@ -344,9 +440,9 @@ class HomeServiceTab extends StatelessWidget {
           const SizedBox(height: 16),
           const Text('Promo & Keunggulan 2S Member', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
+          const Card(child: ListTile(leading: Icon(Icons.qr_code_2, color: Colors.blue), title: Text('Kartu QR Member Praktis'), subtitle: Text('Cukup tunjukkan QR ke kasir saat servis tanpa sebut nomor berulang!'))),
           const Card(child: ListTile(leading: Icon(Icons.local_offer, color: Colors.orange), title: Text('Diskon Aksesoris Store'), subtitle: Text('Gunakan kode voucher & tukar poin saat checkout!'))),
           const Card(child: ListTile(leading: Icon(Icons.verified_user, color: Colors.green), title: Text('e-Nota & Bukti Foto Garansi'), subtitle: Text('Lengkap dengan foto kondisi HP saat masuk servis.'))),
-          const Card(child: ListTile(leading: Icon(Icons.casino, color: Colors.purple), title: Text('Check-in Harian & Mini Game'), subtitle: Text('Kumpulkan poin gratis setiap hari & raih tier Platinum!'))),
         ],
       );
     }
@@ -371,21 +467,31 @@ class HomeServiceTab extends StatelessWidget {
                     Chip(label: Text('${u.tier} Member')),
                   ],
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 Text('${u.points} Poin', style: const TextStyle(color: JpColors.gold, fontSize: 26, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.tonalIcon(
-                    onPressed: ctrl.canCheckInToday()
-                        ? () async {
-                            final pts = await ctrl.performDailyCheckIn();
-                            if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Check-in sukses! +$pts Poin')));
-                          }
-                        : null,
-                    icon: const Icon(Icons.calendar_today),
-                    label: Text(ctrl.canCheckInToday() ? 'Check-in Harian (Streak ${u.checkInStreak}/7)' : 'Sudah Check-in Hari Ini'),
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.tonalIcon(
+                        onPressed: ctrl.canCheckInToday()
+                            ? () async {
+                                final pts = await ctrl.performDailyCheckIn();
+                                if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Check-in sukses! +$pts Poin')));
+                              }
+                            : null,
+                        icon: const Icon(Icons.calendar_today, size: 18),
+                        label: Text(ctrl.canCheckInToday() ? 'Check-in (${u.checkInStreak}/7)' : 'Sudah Check-in', overflow: TextOverflow.ellipsis),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(backgroundColor: JpColors.orange, foregroundColor: Colors.white),
+                      onPressed: () => showMemberQrDialog(context, u),
+                      icon: const Icon(Icons.qr_code_2, size: 20),
+                      label: const Text('QR Saya'),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -403,28 +509,17 @@ class HomeServiceTab extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(s.invoiceNo, style: const TextStyle(fontWeight: FontWeight.bold)),
-                        Chip(label: Text(s.status)),
-                      ],
-                    ),
+                    Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(s.invoiceNo, style: const TextStyle(fontWeight: FontWeight.bold)), Chip(label: Text(s.status))]),
                     if (s.photoUrl.isNotEmpty) ...[
                       const SizedBox(height: 6),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(10),
-                        child: Image.network(s.photoUrl, height: 120, width: double.infinity, fit: BoxFit.cover),
-                      ),
+                      ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(s.photoUrl, height: 120, width: double.infinity, fit: BoxFit.cover)),
                       const SizedBox(height: 8),
                     ],
                     Text(s.deviceName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                     Text('Keluhan: ${s.complaint}'),
                     Text('Total: ${ctrl.formatRupiah(s.totalCost)}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
                     Text(
-                      s.status == 'Selesai' || s.status == 'Diambil'
-                          ? 'Garansi: Sisa ${s.remainingWarrantyDays} hari'
-                          : 'Garansi aktif setelah selesai',
+                      s.status == 'Selesai' || s.status == 'Diambil' ? 'Garansi: Sisa ${s.remainingWarrantyDays} hari' : 'Garansi aktif setelah selesai',
                       style: TextStyle(color: s.remainingWarrantyDays > 0 ? Colors.green : Colors.red),
                     ),
                     const SizedBox(height: 8),
@@ -432,6 +527,8 @@ class HomeServiceTab extends StatelessWidget {
                       spacing: 8,
                       children: [
                         OutlinedButton.icon(onPressed: () => _showNotaDialog(context, s), icon: const Icon(Icons.receipt_long, size: 18), label: const Text('e-Nota')),
+                        if (ctrl.isAdminMode)
+                          OutlinedButton.icon(onPressed: () => sendNotaToWhatsapp(ctrl, s), icon: const Icon(Icons.chat, size: 18, color: Colors.green), label: const Text('Kirim WA')),
                         if ((s.status == 'Selesai' || s.status == 'Diambil') && s.remainingWarrantyDays > 0 && !s.warrantyClaimed)
                           OutlinedButton.icon(onPressed: () => ctrl.claimWarranty(s), icon: const Icon(Icons.verified_user, size: 18), label: const Text('Klaim Garansi')),
                         if (s.warrantyClaimed) const Chip(label: Text('Garansi Diajukan')),
@@ -478,7 +575,11 @@ class HomeServiceTab extends StatelessWidget {
             ],
           ),
         ),
-        actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Tutup'))],
+        actions: [
+          if (ctrl.isAdminMode)
+            TextButton.icon(onPressed: () => sendNotaToWhatsapp(ctrl, s), icon: const Icon(Icons.chat, color: Colors.green), label: const Text('Kirim WA')),
+          FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Tutup')),
+        ],
       ),
     );
   }
@@ -516,8 +617,7 @@ class _StoreTabState extends State<StoreTab> {
                 TextField(controller: discC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Diskon (%)')),
                 TextField(controller: stockC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Stok')),
                 const SizedBox(height: 8),
-                if (photoUrl.isNotEmpty)
-                  ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(photoUrl, height: 90, width: double.infinity, fit: BoxFit.cover)),
+                if (photoUrl.isNotEmpty) ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.network(photoUrl, height: 90, width: double.infinity, fit: BoxFit.cover)),
                 OutlinedButton.icon(
                   onPressed: uploading
                       ? null
@@ -582,11 +682,7 @@ class _StoreTabState extends State<StoreTab> {
           FilledButton(
             onPressed: () async {
               if (codeC.text.trim().isEmpty) return;
-              await widget.ctrl.addVoucher(
-                code: codeC.text,
-                discountAmount: int.tryParse(discC.text) ?? 10000,
-                minSpend: int.tryParse(minC.text) ?? 0,
-              );
+              await widget.ctrl.addVoucher(code: codeC.text, discountAmount: int.tryParse(discC.text) ?? 10000, minSpend: int.tryParse(minC.text) ?? 0);
               if (ctx.mounted) Navigator.pop(ctx);
             },
             child: const Text('Simpan'),
@@ -648,9 +744,7 @@ class _StoreTabState extends State<StoreTab> {
   @override
   Widget build(BuildContext context) {
     final u = widget.ctrl.currentUser;
-    final myOrders = widget.ctrl.isAdminMode
-        ? widget.ctrl.storeOrders
-        : widget.ctrl.storeOrders.where((o) => o.customerPhone == u?.phone).toList();
+    final myOrders = widget.ctrl.isAdminMode ? widget.ctrl.storeOrders : widget.ctrl.storeOrders.where((o) => o.customerPhone == u?.phone).toList();
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -686,10 +780,7 @@ class _StoreTabState extends State<StoreTab> {
         if (widget.ctrl.extraStoreDiscount > 0)
           Card(
             color: Colors.amber.withValues(alpha: 0.2),
-            child: ListTile(
-              leading: const Icon(Icons.local_offer, color: Colors.orange),
-              title: Text('Hadiah Spin Aktif: Potongan ${widget.ctrl.formatRupiah(widget.ctrl.extraStoreDiscount)}'),
-            ),
+            child: ListTile(leading: const Icon(Icons.local_offer, color: Colors.orange), title: Text('Hadiah Spin Aktif: Potongan ${widget.ctrl.formatRupiah(widget.ctrl.extraStoreDiscount)}')),
           ),
         const SizedBox(height: 8),
         ...widget.ctrl.products.map((p) => Card(
@@ -925,31 +1016,49 @@ class _ProfileTabState extends State<ProfileTab> {
       padding: const EdgeInsets.all(16),
       children: [
         Card(
-          child: ListTile(
-            leading: CircleAvatar(
-              radius: 26,
-              backgroundImage: u.photoUrl.isNotEmpty ? NetworkImage(u.photoUrl) : null,
-              child: u.photoUrl.isEmpty ? const Icon(Icons.person) : null,
-            ),
-            title: Text(u.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-            subtitle: Text('WA: ${u.phone} • Tier: ${u.tier}'),
-            trailing: TextButton.icon(
-              onPressed: _uploadingAvatar
-                  ? null
-                  : () async {
-                      setState(() => _uploadingAvatar = true);
-                      final res = await CloudinaryService.pickAndUpload(context, folder: '2s_member/profiles');
-                      if (!context.mounted) return;
-                      setState(() => _uploadingAvatar = false);
-                      if (res?.url != null) {
-                        await widget.ctrl.updateProfilePhoto(res!.url!);
-                        if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Foto profil berhasil diperbarui!')));
-                      } else if (res?.error != null) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res!.error!)));
-                      }
-                    },
-              icon: _uploadingAvatar ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.camera_alt, size: 18),
-              label: const Text('Foto'),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: CircleAvatar(
+                    radius: 26,
+                    backgroundImage: u.photoUrl.isNotEmpty ? NetworkImage(u.photoUrl) : null,
+                    child: u.photoUrl.isEmpty ? const Icon(Icons.person) : null,
+                  ),
+                  title: Text(u.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  subtitle: Text('WA: ${u.phone} • Tier: ${u.tier}'),
+                  trailing: TextButton.icon(
+                    onPressed: _uploadingAvatar
+                        ? null
+                        : () async {
+                            setState(() => _uploadingAvatar = true);
+                            final res = await CloudinaryService.pickAndUpload(context, folder: '2s_member/profiles');
+                            if (!context.mounted) return;
+                            setState(() => _uploadingAvatar = false);
+                            if (res?.url != null) {
+                              await widget.ctrl.updateProfilePhoto(res!.url!);
+                              if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Foto profil berhasil diperbarui!')));
+                            } else if (res?.error != null) {
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res!.error!)));
+                            }
+                          },
+                    icon: _uploadingAvatar ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.camera_alt, size: 18),
+                    label: const Text('Foto'),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => showMemberQrDialog(context, u),
+                      icon: const Icon(Icons.qr_code_2),
+                      label: const Text('Tampilkan QR Member Saya'),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -963,13 +1072,7 @@ class _ProfileTabState extends State<ProfileTab> {
                 const Text('Verifikasi Email Resmi (Bonus +50 Poin)', style: TextStyle(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
                 if (u.isEmailVerified)
-                  Row(
-                    children: [
-                      const Icon(Icons.check_circle, color: Colors.green),
-                      const SizedBox(width: 8),
-                      Text('Terverifikasi: ${u.email}', style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
-                    ],
-                  )
+                  Row(children: [const Icon(Icons.check_circle, color: Colors.green), const SizedBox(width: 8), Text('Terverifikasi: ${u.email}', style: const TextStyle(color: Colors.green, fontWeight: FontWeight.bold))])
                 else ...[
                   TextField(controller: _emailC, decoration: const InputDecoration(labelText: 'Email Anda', border: OutlineInputBorder())),
                   const SizedBox(height: 8),
@@ -991,9 +1094,7 @@ class _ProfileTabState extends State<ProfileTab> {
                           onPressed: () async {
                             final ok = await widget.ctrl.checkEmailVerificationStatus();
                             if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text(ok ? 'Email berhasil diverifikasi! +50 Poin' : 'Belum diklik. Cek Inbox/Spam email Anda.')),
-                              );
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? 'Email berhasil diverifikasi! +50 Poin' : 'Belum diklik. Cek Inbox/Spam email Anda.')));
                             }
                           },
                           child: const Text('Saya Sudah Klik Link'),
@@ -1023,3 +1124,4 @@ class _ProfileTabState extends State<ProfileTab> {
     );
   }
 }
+// AKHIR FILE main.dart
