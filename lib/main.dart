@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'app_config.dart';
 import 'auth_page.dart';
 import 'cloudinary_service.dart';
+import 'create_nota_page.dart';
 import 'data_store.dart';
 import 'jp_theme_widgets.dart';
 import 'qr_member_widgets.dart';
@@ -159,12 +160,14 @@ Future<void> sendNotaToWhatsapp(AppDataController ctrl, ServiceOrder s) async {
   if (phone.length < 9) return;
   final text = '*e-Nota 2S Service Handphone*\n'
       'No. Nota : ${s.invoiceNo}\n'
-      'Perangkat: ${s.deviceName}\n'
-      'Keluhan  : ${s.complaint}\n'
-      'Sparepart: ${s.replacedPart}\n'
+      'Tgl/Jam  : ${ctrl.formatDateTime(s.createdAt)}\n'
+      'Pelanggan: ${s.customerName.isEmpty ? "-" : s.customerName}\n'
+      'Unit HP  : ${s.fullDeviceName}\n'
+      'Kerusakan: ${s.complaint}\n'
+      'Perbaikan: ${s.replacedPart}\n'
       'Status   : ${s.status}\n'
       'Garansi  : ${s.warrantyDays} Hari\n'
-      'Total    : ${ctrl.formatRupiah(s.totalCost)}\n\n'
+      'Harga    : ${ctrl.formatRupiah(s.totalCost)}\n\n'
       'Terima kasih telah servis di 2S Service Handphone!';
   final url = Uri.parse('https://wa.me/$phone?text=${Uri.encodeComponent(text)}');
   await launchUrl(url, mode: LaunchMode.externalApplication);
@@ -180,169 +183,23 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _tab = 0;
 
-  Future<void> _scanAndOpenServiceDialog() async {
-    final raw = await Navigator.push<String>(
+  void _openCreateNota({String? initialQr}) {
+    Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const QrScannerPage()),
-    );
-    if (!mounted || raw == null) return;
-
-    final member = await widget.ctrl.lookupMemberByPhone(raw);
-    if (!mounted) return;
-    final cleanPhone = widget.ctrl.normalizePhone(raw.replaceFirst('2SMEMBER|', ''));
-    _showAddServiceDialog(context, scannedMember: member, fallbackPhone: cleanPhone);
-  }
-
-  void _showAddServiceDialog(BuildContext context, {MemberUser? scannedMember, String? fallbackPhone}) {
-    final phoneC = TextEditingController(text: scannedMember?.phone ?? fallbackPhone ?? '');
-    final devC = TextEditingController();
-    final compC = TextEditingController();
-    final partC = TextEditingController();
-    final costC = TextEditingController(text: '250000');
-    final warrC = TextEditingController(text: '30');
-    MemberUser? selectedMember = scannedMember;
-    String photoUrl = '';
-    bool uploading = false;
-    bool lookingUp = false;
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlg) => AlertDialog(
-          title: const Text('Buat Nota Servis'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (selectedMember != null)
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: Colors.green.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.green.withValues(alpha: 0.4)),
-                    ),
-                    child: Row(
-                      children: [
-                        CircleAvatar(
-                          radius: 20,
-                          backgroundImage: selectedMember!.photoUrl.isNotEmpty ? NetworkImage(selectedMember!.photoUrl) : null,
-                          child: selectedMember!.photoUrl.isEmpty ? const Icon(Icons.person) : null,
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(selectedMember!.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5)),
-                              Text('${selectedMember!.tier} • ${selectedMember!.points} pts', style: const TextStyle(fontSize: 11.5, color: Colors.green)),
-                            ],
-                          ),
-                        ),
-                        const Icon(Icons.verified, color: Colors.green, size: 20),
-                      ],
-                    ),
-                  ),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: phoneC,
-                        keyboardType: TextInputType.phone,
-                        decoration: const InputDecoration(labelText: 'No. WA Pelanggan'),
-                        onSubmitted: (v) async {
-                          setDlg(() => lookingUp = true);
-                          final m = await widget.ctrl.lookupMemberByPhone(v);
-                          if (ctx.mounted) setDlg(() { selectedMember = m; lookingUp = false; });
-                        },
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'Cari Member',
-                      onPressed: lookingUp
-                          ? null
-                          : () async {
-                              setDlg(() => lookingUp = true);
-                              final m = await widget.ctrl.lookupMemberByPhone(phoneC.text);
-                              if (ctx.mounted) setDlg(() { selectedMember = m; lookingUp = false; });
-                            },
-                      icon: lookingUp ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.search),
-                    ),
-                    IconButton(
-                      tooltip: 'Scan QR Member',
-                      onPressed: () async {
-                        final raw = await Navigator.push<String>(ctx, MaterialPageRoute(builder: (_) => const QrScannerPage()));
-                        if (!ctx.mounted || raw == null) return;
-                        setDlg(() => lookingUp = true);
-                        final m = await widget.ctrl.lookupMemberByPhone(raw);
-                        if (!ctx.mounted) return;
-                        setDlg(() {
-                          lookingUp = false;
-                          selectedMember = m;
-                          phoneC.text = m?.phone ?? widget.ctrl.normalizePhone(raw.replaceFirst('2SMEMBER|', ''));
-                        });
-                      },
-                      icon: const Icon(Icons.qr_code_scanner, color: JpColors.orange),
-                    ),
-                  ],
-                ),
-                TextField(controller: devC, decoration: const InputDecoration(labelText: 'Tipe HP')),
-                TextField(controller: compC, decoration: const InputDecoration(labelText: 'Keluhan')),
-                TextField(controller: partC, decoration: const InputDecoration(labelText: 'Sparepart')),
-                Row(
-                  children: [
-                    Expanded(child: TextField(controller: costC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Biaya (Rp)'))),
-                    const SizedBox(width: 10),
-                    SizedBox(width: 90, child: TextField(controller: warrC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Garansi (Hr)'))),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                if (photoUrl.isNotEmpty)
-                  ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(photoUrl, height: 100, width: double.infinity, fit: BoxFit.cover)),
-                const SizedBox(height: 6),
-                OutlinedButton.icon(
-                  onPressed: uploading
-                      ? null
-                      : () async {
-                          setDlg(() => uploading = true);
-                          final res = await CloudinaryService.pickAndUpload(ctx, folder: '2s_member/services');
-                          if (!ctx.mounted) return;
-                          setDlg(() {
-                            uploading = false;
-                            if (res?.url != null) photoUrl = res!.url!;
-                          });
-                          if (res?.error != null) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res!.error!)));
-                        },
-                  icon: uploading ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.camera_alt),
-                  label: Text(photoUrl.isEmpty ? 'Upload Foto Kondisi HP' : 'Ganti Foto HP'),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
-            FilledButton(
-              onPressed: uploading
-                  ? null
-                  : () async {
-                      await widget.ctrl.addNewService(
-                        phoneC.text,
-                        devC.text.isEmpty ? 'HP Pelanggan' : devC.text,
-                        compC.text.isEmpty ? 'Pengecekan' : compC.text,
-                        partC.text.isEmpty ? 'Jasa Servis' : partC.text,
-                        int.tryParse(costC.text) ?? 150000,
-                        int.tryParse(warrC.text) ?? 30,
-                        photoUrl: photoUrl,
-                      );
-                      if (ctx.mounted) Navigator.pop(ctx);
-                    },
-              child: const Text('Simpan Nota'),
-            ),
-          ],
+      MaterialPageRoute(
+        builder: (_) => CreateNotaPage(
+          ctrl: widget.ctrl,
+          initialQrRaw: initialQr,
+          onSendWa: (s) => sendNotaToWhatsapp(widget.ctrl, s),
         ),
       ),
     );
+  }
+
+  Future<void> _scanAndOpenNota() async {
+    final raw = await Navigator.push<String>(context, MaterialPageRoute(builder: (_) => const QrScannerPage()));
+    if (!mounted || raw == null) return;
+    _openCreateNota(initialQr: raw);
   }
 
   @override
@@ -368,7 +225,7 @@ class _MainShellState extends State<MainShell> {
             if (widget.ctrl.isAdminMode)
               IconButton(
                 tooltip: 'Scan QR Buat Nota',
-                onPressed: _scanAndOpenServiceDialog,
+                onPressed: _scanAndOpenNota,
                 icon: const Icon(Icons.qr_code_scanner, color: JpColors.orange),
               ),
             Row(
@@ -383,9 +240,9 @@ class _MainShellState extends State<MainShell> {
       body: pages[_tab],
       floatingActionButton: widget.ctrl.isAdminMode && widget.ctrl.canUseAdmin && _tab == 0
           ? FloatingActionButton.extended(
-              onPressed: _scanAndOpenServiceDialog,
-              icon: const Icon(Icons.qr_code_scanner),
-              label: const Text('Scan QR Nota'),
+              onPressed: () => _openCreateNota(),
+              icon: const Icon(Icons.receipt_long),
+              label: const Text('Buat Nota'),
             )
           : null,
       bottomNavigationBar: NavigationBar(
@@ -510,16 +367,19 @@ class HomeServiceTab extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(s.invoiceNo, style: const TextStyle(fontWeight: FontWeight.bold)), Chip(label: Text(s.status))]),
+                    Text('${ctrl.formatDateTime(s.createdAt)}${s.customerName.isNotEmpty ? " • ${s.customerName}" : ""}', style: const TextStyle(fontSize: 12, color: Colors.black54)),
                     if (s.photoUrl.isNotEmpty) ...[
                       const SizedBox(height: 6),
                       ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(s.photoUrl, height: 120, width: double.infinity, fit: BoxFit.cover)),
                       const SizedBox(height: 8),
                     ],
-                    Text(s.deviceName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-                    Text('Keluhan: ${s.complaint}'),
-                    Text('Total: ${ctrl.formatRupiah(s.totalCost)}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
+                    const SizedBox(height: 4),
+                    Text(s.fullDeviceName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    Text('Kerusakan: ${s.complaint}'),
+                    Text('Perbaikan: ${s.replacedPart}'),
+                    Text('Harga: ${ctrl.formatRupiah(s.totalCost)}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.blue)),
                     Text(
-                      s.status == 'Selesai' || s.status == 'Diambil' ? 'Garansi: Sisa ${s.remainingWarrantyDays} hari' : 'Garansi aktif setelah selesai',
+                      s.status == 'Selesai' || s.status == 'Diambil' ? 'Garansi: Sisa ${s.remainingWarrantyDays} hari (dari ${s.warrantyDays} hr)' : 'Garansi ${s.warrantyDays} hari (aktif setelah selesai)',
                       style: TextStyle(color: s.remainingWarrantyDays > 0 ? Colors.green : Colors.red),
                     ),
                     const SizedBox(height: 8),
@@ -565,10 +425,12 @@ class HomeServiceTab extends StatelessWidget {
                 const SizedBox(height: 10),
               ],
               Text('No. Nota : ${s.invoiceNo}'),
+              Text('Tgl/Jam  : ${ctrl.formatDateTime(s.createdAt)}'),
+              Text('Pelanggan: ${s.customerName.isEmpty ? "-" : s.customerName}'),
               Text('No. WA   : ${s.customerPhone}'),
-              Text('Perangkat: ${s.deviceName}'),
-              Text('Keluhan  : ${s.complaint}'),
-              Text('Sparepart: ${s.replacedPart}'),
+              Text('Unit HP  : ${s.fullDeviceName}'),
+              Text('Kerusakan: ${s.complaint}'),
+              Text('Perbaikan: ${s.replacedPart}'),
               Text('Garansi  : ${s.warrantyDays} Hari'),
               const Divider(),
               Text('Total    : ${ctrl.formatRupiah(s.totalCost)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
@@ -752,11 +614,7 @@ class _StoreTabState extends State<StoreTab> {
         if (widget.ctrl.isGuest)
           Card(
             color: Colors.amber.withValues(alpha: 0.15),
-            child: ListTile(
-              leading: const Icon(Icons.info, color: Colors.orange),
-              title: const Text('Mode Tamu: Lihat katalog promo. Login untuk membeli!'),
-              trailing: TextButton(onPressed: () => openAuthPage(context, widget.ctrl), child: const Text('Login')),
-            ),
+            child: ListTile(leading: const Icon(Icons.info, color: Colors.orange), title: const Text('Mode Tamu: Lihat katalog promo. Login untuk membeli!'), trailing: TextButton(onPressed: () => openAuthPage(context, widget.ctrl), child: const Text('Login'))),
           ),
         if (widget.ctrl.isAdminMode && widget.ctrl.canUseAdmin)
           Card(
@@ -773,15 +631,9 @@ class _StoreTabState extends State<StoreTab> {
             ),
           ),
         if (widget.ctrl.vouchers.isNotEmpty)
-          Wrap(
-            spacing: 6,
-            children: widget.ctrl.vouchers.where((v) => v.isActive).map((v) => Chip(label: Text('Promo ${v.code}: -${widget.ctrl.formatRupiah(v.discountAmount)}'))).toList(),
-          ),
+          Wrap(spacing: 6, children: widget.ctrl.vouchers.where((v) => v.isActive).map((v) => Chip(label: Text('Promo ${v.code}: -${widget.ctrl.formatRupiah(v.discountAmount)}'))).toList()),
         if (widget.ctrl.extraStoreDiscount > 0)
-          Card(
-            color: Colors.amber.withValues(alpha: 0.2),
-            child: ListTile(leading: const Icon(Icons.local_offer, color: Colors.orange), title: Text('Hadiah Spin Aktif: Potongan ${widget.ctrl.formatRupiah(widget.ctrl.extraStoreDiscount)}')),
-          ),
+          Card(color: Colors.amber.withValues(alpha: 0.2), child: ListTile(leading: const Icon(Icons.local_offer, color: Colors.orange), title: Text('Hadiah Spin Aktif: Potongan ${widget.ctrl.formatRupiah(widget.ctrl.extraStoreDiscount)}'))),
         const SizedBox(height: 8),
         ...widget.ctrl.products.map((p) => Card(
               margin: const EdgeInsets.only(bottom: 10),
@@ -902,9 +754,7 @@ class _GamesMissionTabState extends State<GamesMissionTab> {
               trailing: claimed
                   ? const Chip(label: Text('Selesai'))
                   : FilledButton(
-                      onPressed: widget.ctrl.isGuest
-                          ? () => promptLoginDialog(context, widget.ctrl, 'klaim Misi')
-                          : (completed ? () => widget.ctrl.claimMission(id, pts, title) : null),
+                      onPressed: widget.ctrl.isGuest ? () => promptLoginDialog(context, widget.ctrl, 'klaim Misi') : (completed ? () => widget.ctrl.claimMission(id, pts, title) : null),
                       child: Text(completed ? 'Klaim' : 'Belum'),
                     ),
             ),
@@ -1051,11 +901,7 @@ class _ProfileTabState extends State<ProfileTab> {
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                   child: SizedBox(
                     width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () => showMemberQrDialog(context, u),
-                      icon: const Icon(Icons.qr_code_2),
-                      label: const Text('Tampilkan QR Member Saya'),
-                    ),
+                    child: OutlinedButton.icon(onPressed: () => showMemberQrDialog(context, u), icon: const Icon(Icons.qr_code_2), label: const Text('Tampilkan QR Member Saya')),
                   ),
                 ),
               ],
@@ -1093,9 +939,7 @@ class _ProfileTabState extends State<ProfileTab> {
                         OutlinedButton(
                           onPressed: () async {
                             final ok = await widget.ctrl.checkEmailVerificationStatus();
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? 'Email berhasil diverifikasi! +50 Poin' : 'Belum diklik. Cek Inbox/Spam email Anda.')));
-                            }
+                            if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? 'Email berhasil diverifikasi! +50 Poin' : 'Belum diklik. Cek Inbox/Spam email Anda.')));
                           },
                           child: const Text('Saya Sudah Klik Link'),
                         ),
