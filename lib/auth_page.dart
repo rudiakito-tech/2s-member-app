@@ -7,7 +7,17 @@ import 'cloudinary_service.dart';
 import 'data_store.dart';
 import 'jp_theme_widgets.dart';
 
-enum AuthStep { login, register, verifyRegOtp, forgotPassword, verifyResetOtp, newPassword, resetSuccess }
+enum AuthStep {
+  login,
+  register,
+  verifyRegOtp,
+  forgotPassword,
+  verifyResetOtp,
+  newPassword,
+  resetSuccess,
+  claimNota,
+  verifyClaimOtp,
+}
 
 class AuthPage extends StatefulWidget {
   final AppDataController ctrl;
@@ -34,17 +44,21 @@ class _AuthPageState extends State<AuthPage> {
   final _forgotPhoneC = TextEditingController();
   final _newPassC = TextEditingController();
   final _newPass2C = TextEditingController();
+  final _claimInvC = TextEditingController();
+  final _claimCodeC = TextEditingController();
+  final _claimPhoneC = TextEditingController();
+  final _claimPassC = TextEditingController();
+  final _claimPass2C = TextEditingController();
 
   bool _rememberMe = true, _agreeTerms = true, _uploadingPhoto = false;
-  bool _hideLogin = true, _hideReg1 = true, _hideReg2 = true, _hideNew1 = true, _hideNew2 = true;
+  bool _hideLogin = true, _hideReg1 = true, _hideReg2 = true, _hideNew1 = true, _hideNew2 = true, _hideClaim1 = true, _hideClaim2 = true;
   bool _busy = false, _googleBusy = false, _needsAdminSetup = false;
   String? _errorMsg, _otpCode, _expectedPhone, _mismatchWarning, _adminSetupPhone;
 
-  // Status Validasi Real-Time No. HP
   Timer? _debounce;
   bool _checkingPhone = false;
-  String _loginPhoneStatus = ''; // '', 'not_found', 'has_password', 'no_password'
-  String _regPhoneStatus = ''; // '', 'not_found', 'has_password', 'no_password'
+  String _loginPhoneStatus = '';
+  String _regPhoneStatus = '';
 
   Timer? _timer;
   int _otpSecondsLeft = 179;
@@ -63,7 +77,10 @@ class _AuthPageState extends State<AuthPage> {
   void dispose() {
     _timer?.cancel();
     _debounce?.cancel();
-    for (final c in [_loginIdC, _loginPassC, _regNameC, _regPhoneC, _regPassC, _regPass2C, _regRefC, _forgotPhoneC, _newPassC, _newPass2C]) {
+    for (final c in [
+      _loginIdC, _loginPassC, _regNameC, _regPhoneC, _regPassC, _regPass2C, _regRefC,
+      _forgotPhoneC, _newPassC, _newPass2C, _claimInvC, _claimCodeC, _claimPhoneC, _claimPassC, _claimPass2C,
+    ]) {
       c.dispose();
     }
     super.dispose();
@@ -122,9 +139,7 @@ class _AuthPageState extends State<AuthPage> {
   }
 
   void _goToAdminPasswordSetup() {
-    if ((_adminSetupPhone ?? '').isNotEmpty) {
-      _forgotPhoneC.text = _adminSetupPhone!;
-    }
+    if ((_adminSetupPhone ?? '').isNotEmpty) _forgotPhoneC.text = _adminSetupPhone!;
     _go(AuthStep.forgotPassword);
   }
 
@@ -301,6 +316,49 @@ class _AuthPageState extends State<AuthPage> {
     _go(AuthStep.verifyResetOtp);
   }
 
+  Future<void> _startClaimOtp() async {
+    if (_claimInvC.text.trim().isEmpty) return setState(() => _errorMsg = 'Nomor Nota wajib diisi (contoh: 2S-INV-...).');
+    if (_claimCodeC.text.trim().length < 6) return setState(() => _errorMsg = 'Kode Klaim wajib 6 karakter.');
+    if (_claimPhoneC.text.trim().length < 9) return setState(() => _errorMsg = 'Nomor WhatsApp asli Anda wajib diisi.');
+    if (_claimPassC.text.length < 6) return setState(() => _errorMsg = 'Password minimal 6 karakter.');
+    if (_claimPassC.text != _claimPass2C.text) return setState(() => _errorMsg = 'Konfirmasi password tidak sama.');
+
+    setState(() {
+      _busy = true;
+      _errorMsg = null;
+      _mismatchWarning = null;
+    });
+    final res = await widget.ctrl.startReverseOtp(
+      mode: 'claim',
+      rawPhone: _claimPhoneC.text,
+      password: _claimPassC.text,
+      claimInvoice: _claimInvC.text,
+      claimCode: _claimCodeC.text,
+      onMismatch: (w) {
+        if (mounted) setState(() => _mismatchWarning = '⚠️ Pengirim $w beda dengan nomor $_expectedPhone! Tetap menunggu dari nomor Anda.');
+      },
+      onCompleted: (err) {
+        if (!mounted) return;
+        _timer?.cancel();
+        if (err != null) {
+          setState(() => _errorMsg = err);
+        } else {
+          _finishAuthToDashboard();
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nota berhasil diklaim & akun aktif!')));
+        }
+      },
+    );
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (res.error != null) return setState(() => _errorMsg = res.error);
+    setState(() {
+      _otpCode = res.code;
+      _expectedPhone = res.expectedPhone;
+    });
+    _startOtpCountdown();
+    _go(AuthStep.verifyClaimOtp);
+  }
+
   Future<void> _saveNewPassword() async {
     final p1 = _newPassC.text;
     final okAlpha = RegExp(r'[A-Za-z]').hasMatch(p1) && RegExp(r'\d').hasMatch(p1);
@@ -365,15 +423,19 @@ class _AuthPageState extends State<AuthPage> {
       case AuthStep.register:
         return _registerView();
       case AuthStep.verifyRegOtp:
-        return _otpView(isReset: false);
+        return _otpView(otpMode: 'register');
       case AuthStep.forgotPassword:
         return _forgotView();
       case AuthStep.verifyResetOtp:
-        return _otpView(isReset: true);
+        return _otpView(otpMode: 'reset');
       case AuthStep.newPassword:
         return _newPassView();
       case AuthStep.resetSuccess:
         return _successView();
+      case AuthStep.claimNota:
+        return _claimNotaView();
+      case AuthStep.verifyClaimOtp:
+        return _otpView(otpMode: 'claim');
     }
   }
 
@@ -387,19 +449,13 @@ class _AuthPageState extends State<AuthPage> {
 
   Widget _phoneRealtimeHint({required bool isRegister}) {
     if (_checkingPhone) {
-      return const Padding(
-        padding: EdgeInsets.only(top: 6, left: 4),
-        child: Text('Memeriksa status nomor HP...', style: TextStyle(fontSize: 12, color: JpColors.navyMuted)),
-      );
+      return const Padding(padding: EdgeInsets.only(top: 6, left: 4), child: Text('Memeriksa status nomor HP...', style: TextStyle(fontSize: 12, color: JpColors.navyMuted)));
     }
     final status = isRegister ? _regPhoneStatus : _loginPhoneStatus;
     if (status.isEmpty || status == 'no_password') return const SizedBox.shrink();
 
     if (!isRegister && status == 'has_password') {
-      return const Padding(
-        padding: EdgeInsets.only(top: 6, left: 4),
-        child: Text('✅ Nomor terdaftar. Silakan masukkan password Anda.', style: TextStyle(fontSize: 12, color: Colors.green, fontWeight: FontWeight.w700)),
-      );
+      return const Padding(padding: EdgeInsets.only(top: 6, left: 4), child: Text('✅ Nomor terdaftar. Silakan masukkan password Anda.', style: TextStyle(fontSize: 12, color: Colors.green, fontWeight: FontWeight.w700)));
     }
     if (!isRegister && status == 'not_found') {
       return Padding(
@@ -414,10 +470,7 @@ class _AuthPageState extends State<AuthPage> {
       );
     }
     if (isRegister && status == 'not_found') {
-      return const Padding(
-        padding: EdgeInsets.only(top: 6, left: 4),
-        child: Text('✅ Nomor belum terdaftar dan siap digunakan.', style: TextStyle(fontSize: 12, color: Colors.green, fontWeight: FontWeight.w700)),
-      );
+      return const Padding(padding: EdgeInsets.only(top: 6, left: 4), child: Text('✅ Nomor belum terdaftar dan siap digunakan.', style: TextStyle(fontSize: 12, color: Colors.green, fontWeight: FontWeight.w700)));
     }
     if (isRegister && status == 'has_password') {
       return Padding(
@@ -442,26 +495,17 @@ class _AuthPageState extends State<AuthPage> {
             width: double.infinity,
             margin: const EdgeInsets.only(bottom: 12),
             padding: const EdgeInsets.all(13),
-            decoration: BoxDecoration(
-              color: const Color(0xFFEAF3FF),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFF1E56A0), width: 1.3),
-            ),
+            decoration: BoxDecoration(color: const Color(0xFFEAF3FF), borderRadius: BorderRadius.circular(14), border: Border.all(color: const Color(0xFF1E56A0), width: 1.3)),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Row(
-                  children: [
-                    Icon(Icons.info_outline, color: Color(0xFF1E56A0), size: 20),
-                    SizedBox(width: 6),
-                    Expanded(child: Text('Akun Sudah Terdaftar oleh Admin', style: TextStyle(color: JpColors.navy, fontWeight: FontWeight.w800, fontSize: 13.5))),
-                  ],
-                ),
+                const Row(children: [
+                  Icon(Icons.info_outline, color: Color(0xFF1E56A0), size: 20),
+                  SizedBox(width: 6),
+                  Expanded(child: Text('Akun Sudah Terdaftar oleh Admin', style: TextStyle(color: JpColors.navy, fontWeight: FontWeight.w800, fontSize: 13.5))),
+                ]),
                 const SizedBox(height: 5),
-                const Text(
-                  'Nomor Anda telah didaftarkan otomatis oleh Admin 2S Service saat pembuatan nota. Silakan buat password terlebih dahulu agar dapat masuk ke akun Anda.',
-                  style: TextStyle(color: JpColors.navyMuted, fontSize: 12),
-                ),
+                const Text('Nomor Anda telah didaftarkan otomatis oleh Admin 2S Service saat pembuatan nota. Silakan buat password terlebih dahulu agar dapat masuk ke akun Anda.', style: TextStyle(color: JpColors.navyMuted, fontSize: 12)),
                 const SizedBox(height: 8),
                 SizedBox(
                   width: double.infinity,
@@ -487,10 +531,7 @@ class _AuthPageState extends State<AuthPage> {
     );
   }
 
-  Widget _eye(bool hide, VoidCallback tap) => IconButton(
-        onPressed: tap,
-        icon: Icon(hide ? Icons.visibility_off : Icons.visibility, color: JpColors.navyMuted, size: 20),
-      );
+  Widget _eye(bool hide, VoidCallback tap) => IconButton(onPressed: tap, icon: Icon(hide ? Icons.visibility_off : Icons.visibility, color: JpColors.navyMuted, size: 20));
 
   Widget _loginView() => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -531,7 +572,7 @@ class _AuthPageState extends State<AuthPage> {
           const SizedBox(height: 8),
           JpOrangeButton(label: 'Login', icon: Icons.login, loading: _busy, onTap: _doLogin),
           const Padding(
-            padding: EdgeInsets.symmetric(vertical: 14),
+            padding: EdgeInsets.symmetric(vertical: 12),
             child: Row(children: [Expanded(child: Divider()), Padding(padding: EdgeInsets.symmetric(horizontal: 10), child: Text('atau', style: TextStyle(color: JpColors.navyMuted, fontSize: 12))), Expanded(child: Divider())]),
           ),
           SizedBox(
@@ -549,12 +590,20 @@ class _AuthPageState extends State<AuthPage> {
               ),
             ),
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 14),
           Row(mainAxisAlignment: MainAxisAlignment.center, children: [
             const Text('Belum punya akun? ', style: TextStyle(color: JpColors.navyMuted, fontSize: 13)),
             GestureDetector(onTap: () => _go(AuthStep.register), child: const Text('Daftar Sekarang', style: TextStyle(color: Color(0xFF1E56A0), fontWeight: FontWeight.w800, fontSize: 13))),
           ]),
-          const SizedBox(height: 80),
+          const SizedBox(height: 10),
+          Center(
+            child: TextButton.icon(
+              onPressed: () => _go(AuthStep.claimNota),
+              icon: const Icon(Icons.receipt_long, size: 17, color: JpColors.orange),
+              label: const Text('Salah / Lupa No. HP saat buat nota? Klaim Nota di Sini', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: JpColors.navy)),
+            ),
+          ),
+          const SizedBox(height: 70),
         ],
       );
 
@@ -618,25 +667,54 @@ class _AuthPageState extends State<AuthPage> {
     );
   }
 
-  Widget _otpView({required bool isReset}) {
+  Widget _claimNotaView() => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _topNav(onBack: () => _go(AuthStep.login), right: const TwoSMemberLogo(scale: 0.72)),
+          const SizedBox(height: 6),
+          const Text('Klaim Nota & Ubah Nomor', textAlign: TextAlign.center, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: JpColors.navy)),
+          const SizedBox(height: 4),
+          const Text(
+            'Jika Anda lupa/salah sebut nomor HP saat dibuatkan nota oleh Admin, masukkan No. Nota & Kode Klaim untuk memindahkannya ke nomor WA asli Anda.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: JpColors.navyMuted, fontSize: 12.5),
+          ),
+          const SizedBox(height: 16),
+          _noticeAndErrorBox(),
+          JpInputField(controller: _claimInvC, hint: 'Nomor Nota (contoh: 2S-INV-...)', icon: Icons.receipt_long),
+          const SizedBox(height: 10),
+          JpInputField(controller: _claimCodeC, hint: 'Kode Klaim 6 Digit (dari nota)', icon: Icons.vpn_key_outlined),
+          const SizedBox(height: 10),
+          JpInputField(controller: _claimPhoneC, hint: 'No. HP WhatsApp Anda yang Benar (08...)', icon: Icons.phone_android, keyboardType: TextInputType.phone),
+          const SizedBox(height: 10),
+          JpInputField(controller: _claimPassC, hint: 'Buat Password Akun (min. 6 huruf)', icon: Icons.lock_outline, obscure: _hideClaim1, suffix: _eye(_hideClaim1, () => setState(() => _hideClaim1 = !_hideClaim1))),
+          const SizedBox(height: 10),
+          JpInputField(controller: _claimPass2C, hint: 'Konfirmasi Password', icon: Icons.lock_outline, obscure: _hideClaim2, suffix: _eye(_hideClaim2, () => setState(() => _hideClaim2 = !_hideClaim2))),
+          const SizedBox(height: 18),
+          JpOrangeButton(label: 'Klaim Nota & Verifikasi WA', loading: _busy, onTap: _startClaimOtp),
+          const SizedBox(height: 80),
+        ],
+      );
+
+  Widget _otpView({required String otpMode}) {
     final code = _otpCode ?? '000000';
     final chars = code.padRight(6, '0').split('').take(6).toList();
+    final title = otpMode == 'reset'
+        ? 'Konfirmasi Buat Password'
+        : (otpMode == 'claim' ? 'Verifikasi Klaim Nota' : 'Konfirmasi Nomor WA');
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _topNav(onBack: () {
           _timer?.cancel();
           widget.ctrl.cancelOtpWait();
-          _go(isReset ? AuthStep.forgotPassword : AuthStep.register);
+          _go(otpMode == 'reset' ? AuthStep.forgotPassword : (otpMode == 'claim' ? AuthStep.claimNota : AuthStep.register));
         }),
-        SizedBox(height: isReset ? 72 : 12),
-        Text(isReset ? 'Konfirmasi Buat Password' : 'Konfirmasi Nomor WA', textAlign: TextAlign.center, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: JpColors.navy)),
+        SizedBox(height: otpMode == 'reset' ? 72 : 12),
+        Text(title, textAlign: TextAlign.center, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: JpColors.navy)),
         const SizedBox(height: 6),
-        Text(
-          'Kirim pesan konfirmasi berisi kode verifikasi di bawah melalui WhatsApp dari nomor ${_expectedPhone ?? ''} ke 2S Member:',
-          textAlign: TextAlign.center,
-          style: const TextStyle(color: JpColors.navyMuted, fontSize: 13),
-        ),
+        Text('Kirim pesan konfirmasi berisi kode verifikasi di bawah melalui WhatsApp dari nomor ${_expectedPhone ?? ''} ke 2S Member:', textAlign: TextAlign.center, style: const TextStyle(color: JpColors.navyMuted, fontSize: 13)),
         const SizedBox(height: 14),
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -668,7 +746,9 @@ class _AuthPageState extends State<AuthPage> {
             child: Text(_mismatchWarning!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.bold)),
           ),
         TextButton(
-          onPressed: _resendCooldown > 0 ? null : () => isReset ? _startResetOtp() : _startRegisterOtp(),
+          onPressed: _resendCooldown > 0
+              ? null
+              : () => otpMode == 'reset' ? _startResetOtp() : (otpMode == 'claim' ? _startClaimOtp() : _startRegisterOtp()),
           child: Text(_resendCooldown > 0 ? 'Buat Ulang Kode (${_resendCooldown}s)' : 'Buat Ulang Kode Baru', style: const TextStyle(fontWeight: FontWeight.w700)),
         ),
         JpOrangeButton(label: 'Buka WhatsApp & Kirim', icon: Icons.chat, onTap: _launchWa),
@@ -751,9 +831,7 @@ class _AuthPageState extends State<AuthPage> {
           JpOrangeButton(
             label: 'Login Sekarang',
             onTap: () {
-              if (_forgotPhoneC.text.trim().isNotEmpty) {
-                _loginIdC.text = _forgotPhoneC.text.trim();
-              }
+              if (_forgotPhoneC.text.trim().isNotEmpty) _loginIdC.text = _forgotPhoneC.text.trim();
               _go(AuthStep.login);
             },
           ),
