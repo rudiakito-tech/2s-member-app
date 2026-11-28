@@ -25,6 +25,7 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
   final _damageC = TextEditingController();
   final _repairC = TextEditingController();
   final _priceC = TextEditingController();
+  final _dpC = TextEditingController();
   final _warrantyC = TextEditingController(text: '30');
 
   late DateTime _createdAt;
@@ -35,6 +36,7 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
   bool _uploadingPhoto = false;
   bool _saving = false;
   String _photoUrl = '';
+  String _paymentStatus = 'Belum Bayar';
 
   final _quickBrands = ['Samsung', 'iPhone', 'Xiaomi', 'OPPO', 'Vivo', 'Realme', 'Infinix'];
   final _quickWarranties = ['0', '7', '14', '30', '90'];
@@ -50,7 +52,7 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
 
   @override
   void dispose() {
-    for (final c in [_phoneC, _nameC, _brandC, _typeC, _damageC, _repairC, _priceC, _warrantyC]) {
+    for (final c in [_phoneC, _nameC, _brandC, _typeC, _damageC, _repairC, _priceC, _dpC, _warrantyC]) {
       c.dispose();
     }
     super.dispose();
@@ -131,6 +133,13 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
       return;
     }
 
+    final totalCost = int.tryParse(_priceC.text.replaceAll(RegExp(r'\D'), '')) ?? 0;
+    final dpVal = int.tryParse(_dpC.text.replaceAll(RegExp(r'\D'), '')) ?? 0;
+    if (_paymentStatus == 'DP' && dpVal <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Masukkan nominal DP terlebih dahulu.')));
+      return;
+    }
+
     setState(() => _saving = true);
     final order = await widget.ctrl.addNewService(
       custPhone: phone,
@@ -139,9 +148,11 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
       deviceType: _typeC.text.trim(),
       complaint: _damageC.text.trim(),
       repairAction: _repairC.text.trim().isEmpty ? 'Pengecekan & Servis' : _repairC.text.trim(),
-      cost: int.tryParse(_priceC.text.replaceAll(RegExp(r'\D'), '')) ?? 0,
+      cost: totalCost,
       warrantyDays: int.tryParse(_warrantyC.text.trim()) ?? 30,
-      photoUrl: _photoUrl,
+      paymentStatus: _paymentStatus,
+      paidAmount: _paymentStatus == 'Lunas' ? totalCost : (_paymentStatus == 'DP' ? dpVal : 0),
+      beforePhotoUrl: _photoUrl,
     );
 
     if (!mounted) return;
@@ -157,10 +168,12 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('No. Nota : ${order.invoiceNo}', style: const TextStyle(fontWeight: FontWeight.bold)),
-            Text('Pelanggan: ${order.customerName} (${order.customerPhone})'),
-            Text('Unit     : ${order.fullDeviceName}'),
-            Text('Total    : ${widget.ctrl.formatRupiah(order.totalCost)}'),
+            Text('No. Nota  : ${order.invoiceNo}', style: const TextStyle(fontWeight: FontWeight.bold)),
+            Text('Status    : ${order.status}'),
+            Text('Pelanggan : ${order.customerName} (${order.customerPhone})'),
+            Text('Unit      : ${order.fullDeviceName}'),
+            Text('Total     : ${widget.ctrl.formatRupiah(order.totalCost)}'),
+            Text('Pembayaran: ${order.paymentStatus} (Masuk Kas Toko: ${widget.ctrl.formatRupiah(order.paidAmount)})'),
             const SizedBox(height: 10),
             Container(
               width: double.infinity,
@@ -171,10 +184,7 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
                 children: [
                   Text('Kode Klaim Akun: ${order.claimCode}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: JpColors.navy)),
                   const SizedBox(height: 3),
-                  const Text(
-                    'Berikan No. Nota & Kode Klaim ini ke pelanggan (dipakai jika lupa No. HP atau salah sebut nomor agar bisa klaim mandiri).',
-                    style: TextStyle(fontSize: 11.5, color: JpColors.navyMuted),
-                  ),
+                  const Text('Berikan No. Nota & Kode Klaim ini ke pelanggan agar bisa klaim akun/ganti nomor mandiri.', style: TextStyle(fontSize: 11.5, color: JpColors.navyMuted)),
                 ],
               ),
             ),
@@ -207,6 +217,9 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
 
   @override
   Widget build(BuildContext context) {
+    final estTotal = int.tryParse(_priceC.text.replaceAll(RegExp(r'\D'), '')) ?? 0;
+    final estDp = int.tryParse(_dpC.text.replaceAll(RegExp(r'\D'), '')) ?? 0;
+
     return Scaffold(
       appBar: AppBar(
         backgroundColor: JpColors.creamLight,
@@ -219,7 +232,7 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
             color: JpColors.navy,
             child: ListTile(
               leading: const Icon(Icons.access_time_filled, color: JpColors.gold),
-              title: const Text('Tanggal & Jam Masuk (Otomatis)', style: TextStyle(color: Colors.white70, fontSize: 12)),
+              title: const Text('Tanggal & Jam Masuk • Status: Diterima', style: TextStyle(color: Colors.white70, fontSize: 12)),
               subtitle: Text(widget.ctrl.formatDateTime(_createdAt), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
             ),
           ),
@@ -285,10 +298,7 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
                       margin: const EdgeInsets.only(bottom: 10),
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(color: Colors.amber.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(12), border: Border.all(color: JpColors.gold)),
-                      child: const Text(
-                        '🆕 Mode Tanpa No. HP: Akun sementara dibuatkan otomatis. Nanti pelanggan tinggal pakai menu "Klaim Nota" dengan No. Nota & Kode Klaim untuk isi No. WA asli dan buat password.',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: JpColors.navy),
-                      ),
+                      child: const Text('🆕 Mode Tanpa No. HP: Akun sementara dibuatkan otomatis. Pelanggan klaim nanti pakai No. Nota & Kode Klaim.', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: JpColors.navy)),
                     )
                   else if (_searched && _foundMember != null)
                     Container(
@@ -297,11 +307,7 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
                       decoration: BoxDecoration(color: Colors.green.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.green.withValues(alpha: 0.4))),
                       child: Row(
                         children: [
-                          CircleAvatar(
-                            radius: 22,
-                            backgroundImage: _foundMember!.photoUrl.isNotEmpty ? NetworkImage(_foundMember!.photoUrl) : null,
-                            child: _foundMember!.photoUrl.isEmpty ? const Icon(Icons.person) : null,
-                          ),
+                          CircleAvatar(radius: 22, backgroundImage: _foundMember!.photoUrl.isNotEmpty ? NetworkImage(_foundMember!.photoUrl) : null, child: _foundMember!.photoUrl.isEmpty ? const Icon(Icons.person) : null),
                           const SizedBox(width: 10),
                           Expanded(
                             child: Column(
@@ -309,7 +315,7 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
                               children: [
                                 const Text('✅ Pelanggan Terdaftar (Terisi Otomatis)', style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 12)),
                                 Text('Tier: ${_foundMember!.tier} • Poin: ${_foundMember!.points} pts', style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600)),
-                                Text('Referral: ${_foundMember!.referralCode} • Email: ${_foundMember!.email.isEmpty ? "-" : _foundMember!.email}', style: const TextStyle(fontSize: 11.5, color: Colors.black54)),
+                                Text('Referral: ${_foundMember!.referralCode}', style: const TextStyle(fontSize: 11.5, color: Colors.black54)),
                               ],
                             ),
                           ),
@@ -321,14 +327,58 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
                       margin: const EdgeInsets.only(bottom: 10),
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(color: Colors.orange.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.orange.withValues(alpha: 0.5))),
-                      child: const Text(
-                        '🆕 Pelanggan Baru: Cukup isi Nama & No. HP. Sistem otomatis mendaftarkan akun default, dan password diatur pelanggan via Lupa Password (Reverse OTP).',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: JpColors.navy),
-                      ),
+                      child: const Text('🆕 Pelanggan Baru: Otomatis didaftarkan. Password diatur pelanggan via Lupa Password (Reverse OTP).', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: JpColors.navy)),
                     ),
-                  TextField(
-                    controller: _nameC,
-                    decoration: const InputDecoration(labelText: 'Nama Pelanggan', border: OutlineInputBorder()),
+                  TextField(controller: _nameC, decoration: const InputDecoration(labelText: 'Nama Pelanggan', border: OutlineInputBorder())),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('2. Detail Perangkat & Foto Before', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: JpColors.navy)),
+                  const SizedBox(height: 10),
+                  Wrap(spacing: 6, runSpacing: 4, children: _quickBrands.map((b) => ActionChip(label: Text(b, style: const TextStyle(fontSize: 12)), onPressed: () => setState(() => _brandC.text = b))).toList()),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(child: TextField(controller: _brandC, decoration: const InputDecoration(labelText: 'Merek (Samsung, iPhone...)', border: OutlineInputBorder()))),
+                      const SizedBox(width: 8),
+                      Expanded(child: TextField(controller: _typeC, decoration: const InputDecoration(labelText: 'Type (A54, 13 Pro...)', border: OutlineInputBorder()))),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(controller: _damageC, maxLines: 2, decoration: const InputDecoration(labelText: 'Kerusakan / Keluhan', border: OutlineInputBorder())),
+                  const SizedBox(height: 10),
+                  TextField(controller: _repairC, maxLines: 2, decoration: const InputDecoration(labelText: 'Perbaikan / Sparepart', border: OutlineInputBorder())),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(child: TextField(controller: _priceC, keyboardType: TextInputType.number, onChanged: (_) => setState(() {}), decoration: const InputDecoration(labelText: 'Harga Estimasi / Fix (Rp)', border: OutlineInputBorder()))),
+                      const SizedBox(width: 8),
+                      SizedBox(width: 115, child: TextField(controller: _warrantyC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Garansi (Hari)', border: OutlineInputBorder()))),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(spacing: 6, children: _quickWarranties.map((w) => ActionChip(label: Text('$w Hr', style: const TextStyle(fontSize: 11.5)), onPressed: () => setState(() => _warrantyC.text = w))).toList()),
+                  const SizedBox(height: 10),
+                  if (_photoUrl.isNotEmpty) ...[
+                    ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(_photoUrl, height: 130, width: double.infinity, fit: BoxFit.cover)),
+                    const SizedBox(height: 8),
+                  ],
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _uploadingPhoto ? null : _uploadDevicePhoto,
+                      icon: _uploadingPhoto ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.camera_alt),
+                      label: Text(_photoUrl.isEmpty ? 'Upload Foto HP Before (Cloudinary)' : 'Ganti Foto Before'),
+                    ),
                   ),
                 ],
               ),
@@ -342,51 +392,34 @@ class _CreateNotaPageState extends State<CreateNotaPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('2. Detail Perangkat & Biaya', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: JpColors.navy)),
+                  const Text('3. Status Pembayaran (Otomatis Kas Toko)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: JpColors.navy)),
                   const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 4,
-                    children: _quickBrands.map((b) => ActionChip(label: Text(b, style: const TextStyle(fontSize: 12)), onPressed: () => setState(() => _brandC.text = b))).toList(),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(child: TextField(controller: _brandC, decoration: const InputDecoration(labelText: 'Merek (Samsung, iPhone...)', border: OutlineInputBorder()))),
-                      const SizedBox(width: 8),
-                      Expanded(child: TextField(controller: _typeC, decoration: const InputDecoration(labelText: 'Type (A54, 13 Pro...)', border: OutlineInputBorder()))),
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(value: 'Lunas', label: Text('Lunas')),
+                      ButtonSegment(value: 'DP', label: Text('DP')),
+                      ButtonSegment(value: 'Belum Bayar', label: Text('Belum Bayar')),
                     ],
+                    selected: {_paymentStatus},
+                    onSelectionChanged: (v) => setState(() => _paymentStatus = v.first),
                   ),
-                  const SizedBox(height: 10),
-                  TextField(controller: _damageC, maxLines: 2, decoration: const InputDecoration(labelText: 'Kerusakan / Keluhan', border: OutlineInputBorder())),
-                  const SizedBox(height: 10),
-                  TextField(controller: _repairC, maxLines: 2, decoration: const InputDecoration(labelText: 'Perbaikan / Sparepart Diganti', border: OutlineInputBorder())),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(child: TextField(controller: _priceC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Harga (Rp)', border: OutlineInputBorder()))),
-                      const SizedBox(width: 8),
-                      SizedBox(width: 120, child: TextField(controller: _warrantyC, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Garansi (Hari)', border: OutlineInputBorder()))),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 6,
-                    children: _quickWarranties.map((w) => ActionChip(label: Text('$w Hr', style: const TextStyle(fontSize: 11.5)), onPressed: () => setState(() => _warrantyC.text = w))).toList(),
-                  ),
-                  const SizedBox(height: 10),
-                  if (_photoUrl.isNotEmpty) ...[
-                    ClipRRect(borderRadius: BorderRadius.circular(10), child: Image.network(_photoUrl, height: 130, width: double.infinity, fit: BoxFit.cover)),
-                    const SizedBox(height: 8),
-                  ],
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: _uploadingPhoto ? null : _uploadDevicePhoto,
-                      icon: _uploadingPhoto ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.camera_alt),
-                      label: Text(_photoUrl.isEmpty ? 'Upload Foto Kondisi HP (Cloudinary)' : 'Ganti Foto Kondisi HP'),
+                  if (_paymentStatus == 'DP') ...[
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: _dpC,
+                      keyboardType: TextInputType.number,
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(labelText: 'Nominal DP Dibayar (Rp)', border: OutlineInputBorder()),
                     ),
-                  ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Masuk Kas Toko: ${widget.ctrl.formatRupiah(estDp)} • Sisa: ${widget.ctrl.formatRupiah((estTotal - estDp) < 0 ? 0 : (estTotal - estDp))}',
+                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF1E56A0)),
+                    ),
+                  ] else if (_paymentStatus == 'Lunas') ...[
+                    const SizedBox(height: 8),
+                    Text('Uang masuk Kas Toko saat ini: ${widget.ctrl.formatRupiah(estTotal)}', style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Colors.green)),
+                  ],
                 ],
               ),
             ),
